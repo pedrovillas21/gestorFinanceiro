@@ -4,6 +4,8 @@ from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
 
+from app.api.v1 import api_router
+
 ALEMBIC_INI_PATH = "alembic.ini"
 
 
@@ -23,6 +25,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Gestor Financeiro API", lifespan=lifespan)
+
+app.include_router(api_router)
 
 
 @app.get("/health")

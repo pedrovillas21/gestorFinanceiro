@@ -1,0 +1,9 @@
+"""Rotas da versão 1 da API."""
+from fastapi import APIRouter
+
+from app.api.v1 import telegram
+
+api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(telegram.router)
+
+__all__ = ["api_router"]

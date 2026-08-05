@@ -9,7 +9,13 @@ from app.database import Base
 
 
 class TelegramToken(Base):
-    """Vincula um chat_id do Telegram a um usuário autenticado do sistema."""
+    """Vincula um chat_id do Telegram a um usuário autenticado do sistema.
+
+    Ciclo de vida da linha:
+    1. A aplicação Web gera um `link_token` para o usuário (chat_id ainda nulo).
+    2. O usuário abre o Deep Link `https://t.me/<bot>?start=<link_token>`.
+    3. O bot recebe `/start <link_token>`, grava o `chat_id` e zera o `link_token`.
+    """
 
     __tablename__ = "telegram_tokens"
 
@@ -19,5 +25,12 @@ class TelegramToken(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
     )
-    chat_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    # Nulo enquanto o vínculo estiver pendente (token gerado, Deep Link não aberto ainda).
+    chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    # Token de uso único do Deep Link; zerado assim que o vínculo é concluído.
+    link_token: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    link_token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

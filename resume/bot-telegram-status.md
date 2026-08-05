@@ -1,67 +1,81 @@
 # Status de Implementação — Bot do Telegram com IA
 
-Resumo do que já está pronto no código, do que ainda pode ser feito por mim (Claude) e do que só você consegue fazer, com base no guia [`plan/Guia de Criacao e Configuracao - Bot do Telegram com IA.md`](../plan/Guia%20de%20Criacao%20e%20Configuracao%20-%20Bot%20do%20Telegram%20com%20IA.md).
+Situação do bot em relação ao guia [`plan/Guia de Criacao e Configuracao - Bot do Telegram com IA.md`](../plan/Guia%20de%20Criacao%20e%20Configuracao%20-%20Bot%20do%20Telegram%20com%20IA.md).
 
-> Verificação feita em 05/08/2026, direto no código do repositório (`backend/app`).
+> **Atualizado em 05/08/2026.** O bot está funcionando ponta a ponta.
+> Para rodar, veja o passo a passo em [`como-rodar-o-bot.md`](como-rodar-o-bot.md).
 
 ---
 
-## ✅ O que já está feito no repositório
+## ✅ Validado em produção real
 
-| Item | Onde está | Observação |
+Em 05/08/2026 o fluxo completo foi exercitado contra o Telegram, o Gemini e o Supabase de verdade — não em mock. Duas transações entraram no banco a partir de mensagens no chat:
+
+| tipo | descrição | valor | categoria | pagamento | origem |
+|---|---|---|---|---|---|
+| despesa | Almoço | R$ 20,00 | Alimentação | crédito | telegram |
+| despesa | Janta | R$ 50,00 | Alimentação | — | telegram |
+
+Na segunda mensagem a forma de pagamento não foi citada e a IA devolveu nulo em vez de inventar — comportamento correto do prompt.
+
+- **Bot:** @financeiroPrivadoGestor_bot (id `8638098255`)
+- **Webhook:** registrado e sem erros (`pending_update_count: 0`, `last_error_message` vazio)
+- **Banco:** migration `6ca4ec8a71fb` aplicada; tabelas `users`, `transactions`, `telegram_tokens` criadas no Supabase
+- **Vínculo:** `chat_id` gravado, token de Deep Link consumido corretamente
+
+---
+
+## O que existe no código
+
+| Componente | Arquivo | O que faz |
 |---|---|---|
-| Modelo de vínculo `chat_id ↔ usuário` | [`backend/app/models/telegram_token.py`](../backend/app/models/telegram_token.py) | Tabela `telegram_tokens` com `user_id` (FK) e `chat_id` únicos — é exatamente o que a seção 4.1 do guia pede para "verificar se existe usuário com aquele `telegram_chat_id`". |
-| Variáveis de ambiente já mapeadas | [`backend/app/core/config.py`](../backend/app/core/config.py) e [`backend/.env.example`](../backend/.env.example) | `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN` e `TELEGRAM_WEBHOOK_SECRET` já existem como placeholders/settings, prontos para receber os valores reais. |
-| Dependências Python do checklist (seção 5) | [`backend/requirements.txt`](../backend/requirements.txt) | `fastapi`, `httpx`, `python-dotenv`, `pydantic`, `sqlalchemy` ✅ já instalados. `google-genai` também já está no requirements (necessário para a "Cascata do Gemini"). |
-| Base do FastAPI | [`backend/app/main.py`](../backend/app/main.py) | App já sobe e roda as migrations do Alembic automaticamente no startup. Falta só registrar as rotas do bot nela. |
-| Modelos auxiliares que o fluxo do bot vai usar | [`backend/app/models/user.py`](../backend/app/models/user.py), [`backend/app/models/transaction.py`](../backend/app/models/transaction.py) | Já existem `User` e `Transaction` para persistir o resultado da IA (seção 4.2, passo 5). |
+| Endpoint do webhook | [`app/api/v1/telegram.py`](../backend/app/api/v1/telegram.py) | `POST /api/v1/telegram/webhook`, valida `X-Telegram-Bot-Api-Secret-Token` com comparação constante-no-tempo e responde 200 na hora, processando em background |
+| Schemas do Update | [`app/schemas/telegram.py`](../backend/app/schemas/telegram.py) | Subconjunto tipado do payload (`message`, `chat`, `voice`, `audio`), com `extra="ignore"` |
+| Cliente da Bot API | [`app/services/telegram_client.py`](../backend/app/services/telegram_client.py) | `sendMessage` (com fallback sem Markdown), `sendChatAction`, `getFile` + download do `.ogg`, e os métodos de provisionamento |
+| Cascata do Gemini | [`app/services/gemini.py`](../backend/app/services/gemini.py) | Áudio ou texto → JSON estruturado via `response_schema`; tenta `gemini-flash-latest` e cai para `gemini-2.5-flash` |
+| Regras do bot | [`app/services/telegram_bot.py`](../backend/app/services/telegram_bot.py) | Autenticação por `chat_id`, `/start <token>`, `/ajuda`, `/saldo`, persistência e confirmação em BRL |
+| Modelos | [`app/models/`](../backend/app/models/) | `TelegramToken` com `link_token`/`linked_at`; `Transaction` com `payment_method` e `source` |
+| Provisionamento | [`scripts/setup_telegram_bot.py`](../backend/scripts/setup_telegram_bot.py) | `setWebhook` + `setMyCommands` + `setMyDescription` por HTTP, dispensando os cliques no @BotFather |
+| Cadastro de usuário | [`scripts/criar_usuario.py`](../backend/scripts/criar_usuario.py) | Cria usuário com hash bcrypt, já que não há endpoint de registro |
+| Deep Link | [`scripts/gerar_link_telegram.py`](../backend/scripts/gerar_link_telegram.py) | Gera o token de vínculo e imprime a URL `t.me/<bot>?start=<token>` |
 
-**Resumindo:** a base de dados e a configuração já estão prontas para o bot existir. O que falta é a parte "viva": o endpoint do webhook, a lógica de negócio e a integração com a API do Telegram/Gemini.
+### Fluxo implementado
 
----
-
-## 🤖 O que eu (Claude) ainda posso fazer — código, sem precisar dos seus segredos
-
-Nada disso exige que você me entregue tokens reais para eu **escrever** o código (só para você **testar** depois):
-
-1. **Endpoint `POST /api/v1/telegram/webhook`** no FastAPI (seção 3.1), incluindo validação do header `X-Telegram-Bot-Api-Secret-Token` contra `TELEGRAM_WEBHOOK_SECRET`.
-2. **Lógica de autenticação por `chat_id`** (seção 4.1): consulta em `telegram_tokens`, e resposta com link de Deep Link quando o usuário não for encontrado.
-3. **Fluxo de vínculo via Deep Link** (`/start <token>`) para conectar a conta Web ao `chat_id` do Telegram.
-4. **Download do áudio `.ogg`** via API de arquivos do Telegram e envio para a "Cascata do Gemini" (`google-genai` já está instalado).
-5. **Persistência da transação** extraída pela IA (tipo, valor, categoria, método de pagamento) e mensagem de confirmação de volta ao chat.
-6. **Comandos `/ajuda` e `/saldo`** (lógica de negócio, resumo do mês).
-7. **Script de setup automático via Bot API** — depois que você tiver o token, `setWebhook`, `setMyCommands` e `setMyDescription` **são chamadas HTTP comuns** (não precisam do app do BotFather), então posso escrever um script `httpx`/`requests` que configura tudo isso automaticamente assim que o token estiver no `.env`.
-
-👉 Se quiser, no próximo passo eu já implemento os itens 1–6 (o webhook completo). Só peça.
+1. Telegram chama o webhook com o header secreto → validado contra `TELEGRAM_WEBHOOK_SECRET`.
+2. O update é validado pelo Pydantic e vai para uma *background task*; o `{"ok": true}` sai imediatamente, para o Telegram não reenviar o update enquanto a IA processa.
+3. Busca em `telegram_tokens` pelo `chat_id`. Não encontrado → convite para conectar a conta. `/start <token>` → valida (uso único + 30 min), grava o `chat_id` e confirma.
+4. Áudio → `getFile` → download do `.ogg` → Cascata do Gemini. Texto → direto para a Cascata.
+5. Não sendo um lançamento claro, o bot explica o que enviar em vez de inventar valor.
+6. Sendo, grava em `transactions` com o `user_id` do vínculo e responde com os dados formatados.
 
 ---
 
-## 🙋 O que só você consegue fazer (ações manuais, fora do meu alcance)
-
-| # | Ação | Por quê só você pode fazer |
-|---|---|---|
-| 1 | Criar o bot no **@BotFather** (`/newbot`, nome, username) — seção 2.1 | Exige sua conta pessoal do Telegram; é uma interação dentro do app do Telegram. |
-| 2 | Copiar o **HTTP API Token** gerado pelo BotFather | Só existe depois do passo 1, e é um segredo que só você deve manusear. |
-| 3 | Obter a **`GEMINI_API_KEY`** no Google AI Studio | Requer login na sua conta Google e aceite dos termos da API. |
-| 4 | Colar os valores reais no `backend/.env` (`TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`) | Eu posso editar o arquivo se você me passar os valores, mas não posso gerá-los — são credenciais vinculadas à sua conta. Se preferir, você mesmo cola direto no `.env` sem nunca me enviar o segredo. |
-| 5 | Definir um `TELEGRAM_WEBHOOK_SECRET` forte | Posso gerar uma string aleatória segura para você, mas a decisão/posse final é sua (é um segredo de produção). |
-| 6 | **Disponibilizar o backend em um domínio HTTPS válido em produção** (deploy + certificado SSL) — seção 3 e checklist item 4 | Decisão de infraestrutura/hosting (ex: Railway, Render, Fly.io, VPS próprio) que envolve contas externas, custos e escolha de provedor — não posso decidir nem provisionar isso por você. |
-| 7 | Rodar o `POST /setWebhook` apontando para a URL pública real, depois que o deploy estiver no ar | O script eu posso escrever, mas ele só funciona depois que existe uma URL HTTPS pública de verdade respondendo — isso depende do passo 6 estar concluído. |
-| 8 (dev local) | Se for testar localmente, subir um túnel (**Ngrok** ou **Cloudflare Tunnel**) apontando pro FastAPI local — seção 3 | Requer instalar/rodar uma ferramenta na sua máquina e criar conta no serviço de túnel, se aplicável. |
-
----
-
-## 📋 Checklist do guia (seção 5) — situação atual
+## 📋 Checklist do guia (seção 5)
 
 - [x] Pacotes Python instalados (`fastapi`, `httpx`, `python-dotenv`, `pydantic`, `sqlalchemy`)
-- [ ] Conta no Telegram ativada e acesso ao @BotFather — **manual**
-- [ ] Credencial `GEMINI_API_KEY` configurada com valor real — **manual** (variável já existe, falta o valor)
-- [ ] Certificado SSL válido / HTTPS em produção — **manual** (depende de escolha de hospedagem)
+- [x] Conta no Telegram e bot criado no @BotFather
+- [x] `GEMINI_API_KEY` configurada e exercitada com áudio real
+- [x] Endpoint de webhook, autenticação por `chat_id`, Deep Link, áudio→IA, persistência e comandos
+- [x] Provisionamento automatizado (`setWebhook` / `setMyCommands` / `setMyDescription`)
+- [x] HTTPS válido — via túnel Cloudflare em desenvolvimento
+- [ ] HTTPS em produção com hospedagem própria — **pendente, ver abaixo**
 
 ---
 
-## Próximo passo sugerido
+## O que falta
 
-1. Você faz os itens manuais 1–3 (BotFather + Gemini API Key) e me passa (ou cola direto no `.env`) os valores.
-2. Enquanto isso, eu já posso adiantar e implementar o endpoint do webhook e a lógica de negócio (itens 1–6 da seção "O que eu ainda posso fazer"), deixando tudo pronto para testar assim que as credenciais existirem.
-3. Quando tiver domínio/deploy definido, eu escrevo o script de `setWebhook` + `setMyCommands` + `setMyDescription`.
+### Hospedagem
+Hoje o bot só responde com a máquina ligada e os dois processos (uvicorn + cloudflared) rodando. Funciona de qualquer lugar do mundo — o túnel é uma conexão de dentro para fora, então o celular nunca precisa alcançar a rede de casa —, mas depende da máquina estar acesa.
+
+Quando for hospedar, dois pontos pesam mais que domínio próprio:
+
+- **Serviço que hiberna é ruim para webhook.** No cold start a requisição não chega ao app, o Telegram reenvia, e o mesmo áudio pode virar duas transações. Free tier do Render tem esse comportamento; Railway ou Fly com instância sempre ligada, não.
+- **Domínio não é requisito técnico.** O Telegram aceita `*.onrender.com`, `*.fly.dev` e afins, porque exige apenas HTTPS com certificado válido. Domínio próprio é cosmético — e, quando comprar, compre separado do host.
+
+### Idempotência do webhook
+Guardar o `update_id` já processado e ignorar repetidos. Hoje o risco é teórico (o túnel não hiberna), mas vira concreto em hospedagem com cold start. É a proteção que torna seguro remover o `drop_pending_updates: True` do script de setup.
+
+### Fora do escopo do guia, mas bloqueando o produto
+- **Autenticação JWT da API Web** (`/auth/login`, `/auth/register`). É a ausência dela que faz o cadastro de usuário e a geração do Deep Link serem scripts de linha de comando em vez de rotas. Com ela, o `criar_link_token` vira um `POST /api/v1/telegram/link-token` de poucas linhas.
+- **Tela `conectar-telegram`** no front-end Next.js, consumindo essa rota — hoje o `WEB_APP_URL` apontado nas mensagens do bot não existe.
+- **CRUD de transações** na API Web e o dashboard.

@@ -22,4 +22,8 @@ class Transaction(Base):
     amount: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     type: Mapped[str] = mapped_column(String(20), nullable=False)  # ex.: "income" | "expense"
+    # ex.: "pix" | "dinheiro" | "débito" | "crédito" | "boleto" | "transferência"
+    payment_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Origem do lançamento: "web" | "telegram"
+    source: Mapped[str] = mapped_column(String(20), nullable=False, server_default="web")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
