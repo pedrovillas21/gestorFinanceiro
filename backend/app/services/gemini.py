@@ -31,19 +31,37 @@ CATEGORIAS = [
 
 METODOS_PAGAMENTO = ["pix", "dinheiro", "débito", "crédito", "boleto", "transferência"]
 
-PROMPT = f"""Você é o motor de extração de um gestor financeiro pessoal brasileiro.
-Analise a mensagem do usuário (áudio ou texto) e devolva UM ÚNICO JSON com o lançamento descrito.
+# Períodos aceitos numa consulta de saldo — precisam bater com as chaves de
+# `PERIODOS` em app/services/telegram_bot.py.
+PERIODOS_SALDO = ["dia", "semana", "mes", "3meses"]
 
-Regras:
+PROMPT = f"""Você é o motor de extração de um gestor financeiro pessoal brasileiro.
+Analise a mensagem do usuário (áudio ou texto) e devolva UM ÚNICO JSON.
+
+A mensagem pode ser (a) um lançamento financeiro para registrar ou (b) uma pergunta
+sobre saldo/gastos/receitas. Nunca as duas coisas ao mesmo tempo.
+
+Regras para LANÇAMENTO (ex.: "gastei 40 no mercado", "recebi 3500 de salário"):
+- "eh_transacao": true.
 - "tipo": "receita" (dinheiro que entrou) ou "despesa" (dinheiro que saiu).
 - "valor": número positivo em reais. Converta por extenso: "quarenta e dois e noventa" -> 42.90.
 - "descricao": resumo curto (até 60 caracteres) do que foi pago ou recebido.
 - "categoria": escolha exatamente uma entre {", ".join(CATEGORIAS)}.
 - "metodo_pagamento": um entre {", ".join(METODOS_PAGAMENTO)}; use null se não for citado.
-- Se a mensagem NÃO descrever um lançamento financeiro, ou se o valor não estiver claro,
-  devolva "eh_transacao": false e escreva em "observacao" uma frase curta, em português,
-  explicando ao usuário o que ele deve enviar.
-- Nunca invente valores nem categorias fora da lista."""
+- Nunca invente valores nem categorias fora da lista.
+
+Regras para CONSULTA DE SALDO (ex.: "quanto gastei hoje?", "qual meu saldo essa semana",
+"quanto recebi esse mês", "como estou nos últimos 3 meses"):
+- "eh_transacao": false.
+- "eh_consulta_saldo": true.
+- "periodo_consulta": escolha exatamente um entre {", ".join(PERIODOS_SALDO)}
+  ("dia" = hoje, "semana" = semana atual, "mes" = mês atual, "3meses" = últimos 3 meses).
+  Se a mensagem não deixar claro o período, use "mes".
+
+Se a mensagem não for nem um lançamento nem uma pergunta de saldo, ou se um lançamento
+não tiver o valor claro, devolva "eh_transacao": false, "eh_consulta_saldo": false e
+escreva em "observacao" uma frase curta, em português, explicando ao usuário o que ele
+deve enviar."""
 
 
 class TransacaoExtraida(BaseModel):
@@ -55,8 +73,14 @@ class TransacaoExtraida(BaseModel):
     descricao: str | None = Field(default=None, description="Resumo curto do lançamento")
     categoria: str | None = None
     metodo_pagamento: str | None = None
+    eh_consulta_saldo: bool = Field(
+        default=False, description="true se a mensagem for uma pergunta sobre saldo/gastos/receitas"
+    )
+    periodo_consulta: str | None = Field(
+        default=None, description='um entre "dia", "semana", "mes", "3meses"'
+    )
     observacao: str | None = Field(
-        default=None, description="Mensagem ao usuário quando não houver transação"
+        default=None, description="Mensagem ao usuário quando não houver transação nem consulta"
     )
 
 

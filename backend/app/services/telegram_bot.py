@@ -6,10 +6,12 @@ processamento de áudio/texto pela Cascata do Gemini -> persistência da transa�
 import logging
 import secrets
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
+from dateutil.relativedelta import relativedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -35,9 +37,11 @@ MENSAGEM_AJUDA = (
     "• _“recebi 3500 de salário hoje”_\n"
     "• _“paguei 120 reais de energia no pix”_\n\n"
     "*Comandos*\n"
-    "/saldo — resumo de receitas e despesas do mês\n"
+    "/saldo [dia|semana|mês|3meses] — resumo de receitas e despesas do período (padrão: mês)\n"
     "/ajuda — esta mensagem\n"
-    "/start — conectar sua conta da Web"
+    "/start — conectar sua conta da Web\n\n"
+    "Também dá pra perguntar direto: _“quanto gastei essa semana?”_ ou "
+    "_“como tô nos últimos 3 meses?”_"
 )
 
 
@@ -52,10 +56,58 @@ def formatar_brl(valor: Decimal | float) -> str:
     return f"R$ {quantizado:,.2f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".")
 
 
+def _inicio_do_dia() -> datetime:
+    """Meia-noite de hoje no fuso de São Paulo, em UTC."""
+    agora = datetime.now(TZ)
+    return agora.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
+def _inicio_da_semana() -> datetime:
+    """Meia-noite da segunda-feira da semana corrente no fuso de São Paulo, em UTC."""
+    agora = datetime.now(TZ)
+    inicio = agora - timedelta(days=agora.weekday())
+    return inicio.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
 def _inicio_do_mes() -> datetime:
     """Primeiro instante do mês corrente no fuso de São Paulo, em UTC."""
     agora = datetime.now(TZ)
     return agora.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
+def _inicio_3_meses() -> datetime:
+    """Primeiro instante de 3 meses atrás (mês atual + 2 anteriores) no fuso de SP, em UTC."""
+    agora = datetime.now(TZ)
+    inicio = agora.replace(day=1, hour=0, minute=0, second=0, microsecond=0) - relativedelta(months=2)
+    return inicio.astimezone(UTC)
+
+
+# Períodos aceitos por `/saldo` e pela consulta em linguagem natural via IA — as
+# chaves precisam bater com `gemini.PERIODOS_SALDO`.
+PERIODOS: dict[str, tuple[str, Callable[[], datetime]]] = {
+    "dia": ("Hoje", _inicio_do_dia),
+    "semana": ("Esta semana", _inicio_da_semana),
+    "mes": ("Este mês", _inicio_do_mes),
+    "3meses": ("Últimos 3 meses", _inicio_3_meses),
+}
+
+# Apelidos aceitos no argumento de "/saldo <periodo>" (texto livre digitado à mão).
+_APELIDOS_PERIODO = {
+    "hoje": "dia",
+    "dia": "dia",
+    "semana": "semana",
+    "mes": "mes",
+    "mês": "mes",
+    "3meses": "3meses",
+    "3 meses": "3meses",
+    "trimestre": "3meses",
+}
+
+
+def _normalizar_periodo(argumento: str | None) -> str:
+    """Converte o argumento de `/saldo` (ou o `periodo_consulta` da IA) numa chave válida de `PERIODOS`."""
+    chave = (argumento or "").strip().lower()
+    return _APELIDOS_PERIODO.get(chave, "mes")
 
 
 def montar_deep_link(link_token: str) -> str:
@@ -166,9 +218,10 @@ async def _pedir_vinculo(chat_id: str) -> None:
     )
 
 
-async def _cmd_saldo(db: Session, chat_id: str, user_id: uuid.UUID) -> None:
-    """`/saldo` — resumo de receitas, despesas e saldo do mês corrente."""
-    inicio = _inicio_do_mes()
+async def _cmd_saldo(db: Session, chat_id: str, user_id: uuid.UUID, periodo: str = "mes") -> None:
+    """`/saldo` (ou pergunta em linguagem natural) — resumo de receitas, despesas e saldo do período."""
+    titulo, calcular_inicio = PERIODOS.get(periodo, PERIODOS["mes"])
+    inicio = calcular_inicio()
     linhas = db.execute(
         select(Transaction.type, func.coalesce(func.sum(Transaction.amount), 0))
         .where(Transaction.user_id == user_id, Transaction.created_at >= inicio)
@@ -180,11 +233,10 @@ async def _cmd_saldo(db: Session, chat_id: str, user_id: uuid.UUID) -> None:
     despesas = totais.get("expense", Decimal("0"))
     saldo = receitas - despesas
     emoji = "🟢" if saldo >= 0 else "🔴"
-    mes = datetime.now(TZ).strftime("%m/%Y")
 
     await telegram_client.send_message(
         chat_id,
-        f"*Resumo de {mes}*\n\n"
+        f"*Saldo — {titulo}*\n\n"
         f"📈 Receitas: {formatar_brl(receitas)}\n"
         f"📉 Despesas: {formatar_brl(despesas)}\n"
         f"{emoji} Saldo: {formatar_brl(saldo)}",
@@ -239,6 +291,10 @@ async def _registrar_lancamento(
         )
         return
 
+    if extraida.eh_consulta_saldo:
+        await _cmd_saldo(db, chat_id, user_id, periodo=_normalizar_periodo(extraida.periodo_consulta))
+        return
+
     tipo = _normalizar_tipo(extraida.tipo)
     if not extraida.eh_transacao or extraida.valor is None or tipo is None:
         await telegram_client.send_message(
@@ -284,7 +340,7 @@ async def _tratar_mensagem(db: Session, mensagem: TelegramMessage) -> None:
             return
 
         if comando == "/saldo":
-            await _cmd_saldo(db, chat_id, vinculo.user_id)
+            await _cmd_saldo(db, chat_id, vinculo.user_id, periodo=_normalizar_periodo(argumento))
         else:  # /ajuda, /help e qualquer comando desconhecido
             await telegram_client.send_message(chat_id, MENSAGEM_AJUDA)
         return
