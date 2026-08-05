@@ -1,0 +1,29 @@
+# --- Segredos ---
+.env
+.env.local
+*.env
+!*.env.example
+
+# --- Python / Backend ---
+backend/venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Node / Frontend (Next.js) ---
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+frontend/next-env.d.ts
+
+# --- Editor / SO ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+npm-debug.log*
