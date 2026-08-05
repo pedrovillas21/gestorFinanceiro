@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "resume/como-rodar-o-bot.md",
+                "file": "README.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "como-rodar-o-bot"
+              "title": "README"
             }
           }
         ]
@@ -95,7 +95,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "resume/como-rodar-o-bot.md",
+                "file": "README.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -105,7 +105,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Links inversos para como-rodar-o-bot"
+              "title": "Links inversos para README"
             }
           },
           {
@@ -114,12 +114,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "resume/como-rodar-o-bot.md",
+                "file": "README.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Links de saída para como-rodar-o-bot"
+              "title": "Links de saída para README"
             }
           },
           {
@@ -157,13 +157,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "resume/como-rodar-o-bot.md",
+                "file": "README.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Sumário de como-rodar-o-bot"
+              "title": "Sumário de README"
             }
           }
         ]
@@ -186,6 +186,17 @@
   },
   "active": "1ab8a2ba20e0a7a5",
   "lastOpenFiles": [
+    "resume/como-rodar-o-bot.md",
+    "resume/bot-telegram-status.md.tmp.20956.b375abe051d0",
+    "README.md.tmp.20956.162f4106520d",
+    "README.md.tmp.20956.52e4a26b7ef8",
+    "backend/app/services/telegram_bot.py.tmp.20956.3ed83e4bf0f0",
+    "backend/app/services/telegram_bot.py.tmp.20956.7b10fe1490c3",
+    "backend/app/services/telegram_bot.py.tmp.20956.1881842d6eee",
+    "backend/app/services/telegram_bot.py.tmp.20956.849754428ae8",
+    "backend/app/services/gemini.py.tmp.20956.f809e9fe50f0",
+    "backend/app/services/gemini.py.tmp.20956.aa41f1253672",
+    "backend/alembic/versions/__pycache__/b75641c60d56_enable_row_level_security_and_balance_.cpython-312.pyc",
     "resume/bot-telegram-status.md"
   ]
 }

@@ -13,7 +13,9 @@ Ambiente de desenvolvimento preparado conforme [plan/Plano de Preparacao do Ambi
 - ✅ Frontend Next.js 14 (TypeScript + Tailwind + ESLint + App Router) em `frontend/`, com `recharts`, `lucide-react`, `axios`, `@tanstack/react-table`, `@supabase/supabase-js` instalados
 - ✅ `.gitignore` na raiz (protege `.env`, `venv/`, `node_modules/`, `.next/`)
 - ✅ `backend/.env.example` e `frontend/.env.local.example` como modelos
-- ✅ **Bot do Telegram com IA**: webhook `POST /api/v1/telegram/webhook`, vínculo por Deep Link, comandos `/start`, `/ajuda` e `/saldo`, transcrição de áudio pela Cascata do Gemini e persistência das transações — detalhes em [resume/bot-telegram-status.md](resume/bot-telegram-status.md)
+- ✅ **Bot do Telegram com IA**: webhook `POST /api/v1/telegram/webhook`, vínculo por Deep Link, comandos `/start`, `/ajuda` e `/saldo [dia|semana|mês|3meses]`, transcrição de áudio pela Cascata do Gemini e persistência das transações — detalhes em [resume/bot-telegram-status.md](resume/bot-telegram-status.md)
+- ✅ **Consulta de saldo por período em linguagem natural**: a Cascata do Gemini reconhece perguntas como "quanto gastei essa semana?" (sem precisar do comando `/saldo`) e devolve o resumo do dia, da semana, do mês ou dos últimos 3 meses — ver `PERIODOS_SALDO` em [backend/app/services/gemini.py](backend/app/services/gemini.py) e `PERIODOS` em [backend/app/services/telegram_bot.py](backend/app/services/telegram_bot.py)
+- ✅ **Row Level Security (RLS)** habilitado em todas as tabelas com dado de usuário (`users`, `transactions`, `telegram_tokens`) — padrão obrigatório para tabelas novas, ver seção "Padrão: RLS obrigatório" abaixo
 
 > 👉 Para subir e usar o bot no dia a dia, o passo a passo completo (incluindo criar usuário e resolver os erros comuns) está em **[resume/como-rodar-o-bot.md](resume/como-rodar-o-bot.md)**.
 
@@ -45,6 +47,29 @@ cd backend
 alembic upgrade head
 ```
 Depois de alterar um model, gere a revision correspondente com `alembic revision --autogenerate -m "descricao"`.
+
+> ⚠️ Como o `lifespan` roda `alembic upgrade head` sozinho a cada start/reload do `uvicorn`, uma migration
+> gerada com `pass` (placeholder) já pode ser "aplicada" — vazia — se o servidor com `--reload` estiver de
+> pé enquanto você ainda está escrevendo o conteúdo real. Se isso acontecer, o jeito de destravar é
+> `alembic stamp <revision_anterior>` seguido de `alembic upgrade head`, para o Alembic rodar o SQL de
+> verdade em vez de achar que já está tudo aplicado.
+
+#### Padrão: Row Level Security (RLS) obrigatório em tabela nova
+✅ Feito na revision `b75641c60d56`: RLS habilitado (`ENABLE` + `FORCE ROW LEVEL SECURITY`) em `users`,
+`transactions` e `telegram_tokens`, sem nenhuma policy de leitura/escrita. O papel `postgres` da
+`DATABASE_URL` tem `BYPASSRLS` (confirmado em produção), então a API FastAPI não é afetada — quem passa a
+ser bloqueado é qualquer acesso direto via PostgREST/Supabase client (papéis `anon`/`authenticated`), que
+por padrão do Supabase pode ler/escrever em qualquer tabela sem policy nenhuma assim que a REST API é
+exposta. Como o projeto ainda não usa Supabase Auth (autenticação é JWT próprio), "negar tudo" é a policy
+certa por ora — não há `auth.uid()` para uma policy de posse por linha.
+
+**A partir de agora, toda tabela nova com dado de usuário entra com RLS na mesma migration que a cria:**
+```python
+op.execute("ALTER TABLE minha_tabela ENABLE ROW LEVEL SECURITY")
+op.execute("ALTER TABLE minha_tabela FORCE ROW LEVEL SECURITY")
+```
+Se o projeto adotar Supabase Auth no futuro, revisitar essas tabelas e adicionar policies de posse
+(`USING (user_id = auth.uid())`) para liberar acesso direto do client autenticado.
 
 ### 4. Criar um usuário
 Ainda não existe endpoint de cadastro — use o script:
