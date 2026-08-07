@@ -28,3 +28,6 @@ Thumbs.db
 *.log
 npm-debug.log*
 .obsidian/
+
+# --- Graphify ---
+/graphify-out/

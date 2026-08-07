@@ -15,7 +15,9 @@ Ambiente de desenvolvimento preparado conforme [plan/Plano de Preparacao do Ambi
 - ✅ `backend/.env.example` e `frontend/.env.local.example` como modelos
 - ✅ **Bot do Telegram com IA**: webhook `POST /api/v1/telegram/webhook`, vínculo por Deep Link, comandos `/start`, `/ajuda` e `/saldo [dia|semana|mês|3meses]`, transcrição de áudio pela Cascata do Gemini e persistência das transações — detalhes em [resume/bot-telegram-status.md](resume/bot-telegram-status.md)
 - ✅ **Consulta de saldo por período em linguagem natural**: a Cascata do Gemini reconhece perguntas como "quanto gastei essa semana?" (sem precisar do comando `/saldo`) e devolve o resumo do dia, da semana, do mês ou dos últimos 3 meses — ver `PERIODOS_SALDO` em [backend/app/services/gemini.py](backend/app/services/gemini.py) e `PERIODOS` em [backend/app/services/telegram_bot.py](backend/app/services/telegram_bot.py)
-- ✅ **Row Level Security (RLS)** habilitado em todas as tabelas com dado de usuário (`users`, `transactions`, `telegram_tokens`) — padrão obrigatório para tabelas novas, ver seção "Padrão: RLS obrigatório" abaixo
+- ✅ **Row Level Security (RLS)** incorporado às migrations de todas as tabelas com dado de usuário — padrão obrigatório para tabelas novas, ver seção "Padrão: RLS obrigatório" abaixo
+- ✅ **API Web autenticada**: JWT, CRUD/filtros/resumo de transações, importação/exportação CSV/XLSX e conexão do Telegram com consentimento versionado
+- ✅ **Carteira de investimentos**: movimentações completas, preço médio, ganhos, proventos, TWR/MWR, cache de cotações brapi e simulador de juros compostos
 
 > 👉 Para subir e usar o bot no dia a dia, o passo a passo completo (incluindo criar usuário e resolver os erros comuns) está em **[resume/como-rodar-o-bot.md](resume/como-rodar-o-bot.md)**.
 
@@ -71,8 +73,11 @@ op.execute("ALTER TABLE minha_tabela FORCE ROW LEVEL SECURITY")
 Se o projeto adotar Supabase Auth no futuro, revisitar essas tabelas e adicionar policies de posse
 (`USING (user_id = auth.uid())`) para liberar acesso direto do client autenticado.
 
+As migrations posteriores aplicam o mesmo padrão a jobs de importação, confirmações pendentes,
+ativos, movimentações, cotações e snapshots. Elas ainda devem ser aplicadas no ambiente remoto.
+
 ### 4. Criar um usuário
-Ainda não existe endpoint de cadastro — use o script:
+Use `POST /api/v1/auth/register`. Para administração local, o script continua disponível:
 ```powershell
 python scripts\criar_usuario.py --email voce@exemplo.com --nome "Seu Nome"
 ```
@@ -125,18 +130,18 @@ gestorFinanceiro/
 ├── backend/
 │   ├── venv/                  (gitignored)
 │   ├── app/
-│   │   ├── api/v1/telegram.py # Webhook do Telegram
+│   │   ├── api/v1/            # Auth, transações, dashboard, Telegram, carteira e calculadora
 │   │   ├── core/config.py     # Settings via pydantic-settings
 │   │   ├── database.py        # engine, SessionLocal, Base
-│   │   ├── models/            # User, Transaction, TelegramToken
-│   │   ├── schemas/           # Payload do Update do Telegram
-│   │   ├── services/          # Bot API, Cascata do Gemini, regras do bot
+│   │   ├── models/            # Usuários, finanças, carteira, jobs e idempotência
+│   │   ├── schemas/           # Contratos Pydantic da API e integrações
+│   │   ├── services/          # IA, bot, planilhas, mercado e cálculos financeiros
 │   │   └── main.py            # FastAPI + lifespan (auto-run migrations)
 │   ├── scripts/               # setup do bot, criar usuário, gerar Deep Link
-│   ├── tests/                 # períodos do /saldo e contrato do JSON da IA
+│   ├── tests/                 # contratos, cálculos e integração HTTP isolada
 │   ├── alembic/
 │   │   ├── env.py             # lê DATABASE_URL do .env, target_metadata = Base.metadata
-│   │   └── versions/          # 6ca4ec8a71fb (schema inicial), b75641c60d56 (RLS + índice)
+│   │   └── versions/          # schema inicial e evoluções da API/carteira/confirmações
 │   ├── alembic.ini
 │   ├── requirements.txt
 │   └── .env.example
@@ -150,8 +155,7 @@ gestorFinanceiro/
 
 ## Próximos passos do produto
 
-- **Autenticação JWT da API Web** (`/auth/login`, `/auth/register`) — sem ela, cadastrar usuário e gerar o Deep Link continuam sendo scripts de linha de comando.
-- **Tela `conectar-telegram`** no front-end, para o vínculo sair do terminal.
-- **CRUD de transações** e dashboard.
-- **Hospedagem**, para o bot responder sem depender da máquina ligada — ver a análise em [resume/bot-telegram-status.md](resume/bot-telegram-status.md).
-- Opcional: token da [brapi](https://brapi.dev), se for usar cotações da B3 (`BRAAPI_TOKEN`); sem ele, dá para usar só `yfinance`.
+- Construir o front-end consumindo os contratos disponíveis em `/docs`.
+- Aplicar as migrations novas no Supabase de desenvolvimento e validar o fluxo com dados reais.
+- Configurar hospedagem contínua para o webhook e agendar `scripts/refresh_market_quotes.py`.
+- Configurar `BRAPI_TOKEN` para consultar todo o universo de ativos coberto pelo provedor.

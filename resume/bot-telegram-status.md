@@ -5,6 +5,11 @@ Situação do bot em relação ao guia [`plan/Guia de Criacao e Configuracao - B
 > **Atualizado em 05/08/2026.** O bot está funcionando ponta a ponta.
 > Para rodar, veja o passo a passo em [`como-rodar-o-bot.md`](como-rodar-o-bot.md).
 
+> **Evolução de 07/08/2026:** autenticação JWT, CRUD/dashboard, consentimento, idempotência e
+> confirmação por botões foram implementados depois deste registro de produção. Consulte os
+> relatórios [`01-backend-fundacao-autenticacao-financas.md`](01-backend-fundacao-autenticacao-financas.md)
+> e [`02-backend-investimentos-cotacoes-calculadora.md`](02-backend-investimentos-cotacoes-calculadora.md).
+
 ---
 
 ## ✅ Validado em produção real
@@ -70,13 +75,12 @@ Hoje o bot só responde com a máquina ligada e os dois processos (uvicorn + clo
 
 Quando for hospedar, dois pontos pesam mais que domínio próprio:
 
-- **Serviço que hiberna é ruim para webhook.** No cold start a requisição não chega ao app, o Telegram reenvia, e o mesmo áudio pode virar duas transações. Free tier do Render tem esse comportamento; Railway ou Fly com instância sempre ligada, não.
+- **Serviço que hiberna é ruim para webhook.** No cold start a requisição pode atrasar e o Telegram reenviar. A idempotência agora impede duplicidade, mas o usuário ainda percebe indisponibilidade.
 - **Domínio não é requisito técnico.** O Telegram aceita `*.onrender.com`, `*.fly.dev` e afins, porque exige apenas HTTPS com certificado válido. Domínio próprio é cosmético — e, quando comprar, compre separado do host.
 
 ### Idempotência do webhook
-Guardar o `update_id` já processado e ignorar repetidos. Hoje o risco é teórico (o túnel não hiberna), mas vira concreto em hospedagem com cold start. É a proteção que torna seguro remover o `drop_pending_updates: True` do script de setup.
+✅ Implementada em `processed_telegram_updates`: o `update_id` é persistido antes do processamento e a chave primária elimina inclusive corridas entre entregas simultâneas.
 
-### Fora do escopo do guia, mas bloqueando o produto
-- **Autenticação JWT da API Web** (`/auth/login`, `/auth/register`). É a ausência dela que faz o cadastro de usuário e a geração do Deep Link serem scripts de linha de comando em vez de rotas. Com ela, o `criar_link_token` vira um `POST /api/v1/telegram/link-token` de poucas linhas.
-- **Tela `conectar-telegram`** no front-end Next.js, consumindo essa rota — hoje o `WEB_APP_URL` apontado nas mensagens do bot não existe.
-- **CRUD de transações** na API Web e o dashboard.
+### Fora do escopo do guia
+- **Tela `conectar-telegram`** no front-end Next.js, consumindo `POST /api/v1/telegram/link` — o backend já exige e persiste o consentimento versionado.
+- **Deploy das migrations novas** no Supabase; a implementação local não altera o banco remoto durante os testes.
