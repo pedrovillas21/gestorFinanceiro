@@ -20,14 +20,14 @@ from app.models.user import User  # noqa: E402
 from app.services.telegram_bot import criar_link_token, montar_deep_link  # noqa: E402
 
 
-def main(email: str) -> None:
+def main(email: str, consent_version: str) -> None:
     db = SessionLocal()
     try:
         usuario = db.scalars(select(User).where(User.email == email)).one_or_none()
         if usuario is None:
             raise SystemExit(f"❌ Nenhum usuário com o e-mail {email}")
 
-        token = criar_link_token(db, usuario.id)
+        token = criar_link_token(db, usuario.id, consent_version=consent_version)
     finally:
         db.close()
 
@@ -43,4 +43,10 @@ def main(email: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Gera o Deep Link de vínculo do Telegram.")
     parser.add_argument("--email", required=True, help="E-mail do usuário cadastrado")
-    main(parser.parse_args().email)
+    parser.add_argument(
+        "--consent-version",
+        default="dev-cli-v1",
+        help="Versão do texto de privacidade aceito pelo usuário",
+    )
+    args = parser.parse_args()
+    main(args.email, args.consent_version)

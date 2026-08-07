@@ -3,6 +3,7 @@
 Fluxo: autenticação por `chat_id` -> comandos (/start, /ajuda, /saldo) ->
 processamento de áudio/texto pela Cascata do Gemini -> persistência da transação.
 """
+import asyncio
 import logging
 import secrets
 import uuid
@@ -13,12 +14,16 @@ from zoneinfo import ZoneInfo
 
 from dateutil.relativedelta import relativedelta
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.money import decimal_from_value, quantize_money
 from app.database import SessionLocal
 from app.models.telegram_token import TelegramToken
 from app.models.transaction import Transaction
+from app.models.telegram_update import ProcessedTelegramUpdate
+from app.models.pending_transaction import PendingTransaction
 from app.models.user import User
 from app.schemas.telegram import TelegramMessage, TelegramUpdate
 from app.services import gemini, telegram_client
@@ -28,6 +33,7 @@ logger = logging.getLogger(__name__)
 TZ = ZoneInfo("America/Sao_Paulo")
 
 TIPO_POR_EXTENSO = {"receita": "income", "despesa": "expense"}
+CONFIRMATION_TTL_MINUTES = 10
 
 MENSAGEM_AJUDA = (
     "*Como usar o Gestor Financeiro IA* 🤖\n\n"
@@ -50,9 +56,9 @@ MENSAGEM_AJUDA = (
 # --------------------------------------------------------------------------------------
 
 
-def formatar_brl(valor: Decimal | float) -> str:
+def formatar_brl(valor: Decimal) -> str:
     """Formata um número no padrão brasileiro: 1234.5 -> 'R$ 1.234,50'."""
-    quantizado = Decimal(str(valor)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    quantizado = valor.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     return f"R$ {quantizado:,.2f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".")
 
 
@@ -130,7 +136,9 @@ def montar_deep_link(link_token: str) -> str:
     return f"https://t.me/{username}?start={link_token}"
 
 
-def criar_link_token(db: Session, user_id: uuid.UUID) -> str:
+def criar_link_token(
+    db: Session, user_id: uuid.UUID, *, consent_version: str | None = None
+) -> str:
     """Gera (ou renova) o token de vínculo de um usuário para uso no Deep Link.
 
     Chamado pela aplicação Web / pelo script `scripts/gerar_link_telegram.py`.
@@ -142,6 +150,12 @@ def criar_link_token(db: Session, user_id: uuid.UUID) -> str:
     if vinculo is None:
         vinculo = TelegramToken(user_id=user_id)
         db.add(vinculo)
+
+    if consent_version:
+        vinculo.privacy_consent_version = consent_version
+        vinculo.privacy_consented_at = datetime.now(UTC)
+    if vinculo.privacy_consented_at is None or not vinculo.privacy_consent_version:
+        raise ValueError("é necessário registrar o consentimento de privacidade")
 
     vinculo.link_token = secrets.token_urlsafe(24)
     vinculo.link_token_expires_at = datetime.now(UTC) + timedelta(
@@ -157,6 +171,14 @@ def _buscar_vinculo(db: Session, chat_id: str) -> TelegramToken | None:
     ).one_or_none()
 
 
+def _consentimento_valido(link: TelegramToken | None) -> bool:
+    return bool(
+        link
+        and link.privacy_consented_at is not None
+        and link.privacy_consent_version
+    )
+
+
 # --------------------------------------------------------------------------------------
 # Comandos
 # --------------------------------------------------------------------------------------
@@ -165,10 +187,13 @@ def _buscar_vinculo(db: Session, chat_id: str) -> TelegramToken | None:
 async def _cmd_start(db: Session, chat_id: str, argumento: str | None) -> None:
     """`/start [token]` — conclui o vínculo do Deep Link (seção 4.1)."""
     if not argumento:
-        if _buscar_vinculo(db, chat_id):
+        link = _buscar_vinculo(db, chat_id)
+        if _consentimento_valido(link):
             await telegram_client.send_message(
                 chat_id, "Sua conta já está conectada. ✅\n\n" + MENSAGEM_AJUDA
             )
+        elif link is not None:
+            await _pedir_consentimento(chat_id)
         else:
             await _pedir_vinculo(chat_id)
         return
@@ -236,7 +261,7 @@ async def _cmd_saldo(db: Session, chat_id: str, user_id: uuid.UUID, periodo: str
     inicio = calcular_inicio()
     linhas = db.execute(
         select(Transaction.type, func.coalesce(func.sum(Transaction.amount), 0))
-        .where(Transaction.user_id == user_id, Transaction.created_at >= inicio)
+        .where(Transaction.user_id == user_id, Transaction.occurred_at >= inicio)
         .group_by(Transaction.type)
     ).all()
 
@@ -271,7 +296,7 @@ def _persistir(
     transacao = Transaction(
         user_id=user_id,
         description=(extraida.descricao or "Lançamento via Telegram")[:255],
-        amount=abs(Decimal(str(extraida.valor))),
+        amount=quantize_money(abs(Decimal(str(extraida.valor)))),
         category=(extraida.categoria or None),
         type=tipo,
         payment_method=(extraida.metodo_pagamento or None),
@@ -281,6 +306,141 @@ def _persistir(
     db.commit()
     db.refresh(transacao)
     return transacao
+
+
+async def _confirmar_transacao(chat_id: str, transacao: Transaction) -> None:
+    sinal = "📈 Receita" if transacao.type == "income" else "📉 Despesa"
+    detalhes = [
+        f"{sinal} registrada!",
+        f"*{transacao.description}*",
+        formatar_brl(transacao.amount),
+    ]
+    if transacao.category:
+        detalhes.append(f"🏷️ {transacao.category}")
+    if transacao.payment_method:
+        detalhes.append(f"💳 {transacao.payment_method}")
+    await telegram_client.send_message(chat_id, "\n".join(detalhes))
+
+
+def _buscar_pendencia(db: Session, chat_id: str) -> PendingTransaction | None:
+    pending = db.scalar(
+        select(PendingTransaction).where(PendingTransaction.chat_id == chat_id)
+    )
+
+
+async def _pedir_consentimento(chat_id: str) -> None:
+    await telegram_client.send_message(
+        chat_id,
+        "🔐 Sua conta foi vinculada antes do registro de consentimento.\n\n"
+        f"Acesse {settings.WEB_APP_URL}/conectar-telegram, leia a política e gere "
+        "um novo link para continuar.",
+    )
+    if pending is not None and pending.expires_at <= datetime.now(UTC):
+        db.delete(pending)
+        db.commit()
+        return None
+    return pending
+
+
+async def _pedir_tipo(chat_id: str) -> None:
+    await telegram_client.send_message(
+        chat_id,
+        "Não consegui determinar o tipo. Foi uma receita ou uma despesa?",
+        reply_markup={
+            "inline_keyboard": [
+                [
+                    {"text": "📈 Receita", "callback_data": "tx:type:income"},
+                    {"text": "📉 Despesa", "callback_data": "tx:type:expense"},
+                ],
+                [{"text": "Cancelar", "callback_data": "tx:cancel"}],
+            ]
+        },
+    )
+
+
+async def _pedir_valor(chat_id: str) -> None:
+    await telegram_client.send_message(
+        chat_id,
+        "Não consegui determinar o valor. Toque abaixo e depois envie apenas o valor.",
+        reply_markup={
+            "inline_keyboard": [
+                [{"text": "⌨️ Informar valor", "callback_data": "tx:amount"}],
+                [{"text": "Cancelar", "callback_data": "tx:cancel"}],
+            ]
+        },
+    )
+
+
+async def _concluir_pendencia(db: Session, pending: PendingTransaction) -> Transaction:
+    if pending.amount is None or pending.transaction_type is None:
+        raise ValueError("pendência ainda incompleta")
+    transaction = Transaction(
+        user_id=pending.user_id,
+        description=(pending.description or "Lançamento via Telegram")[:255],
+        amount=pending.amount,
+        category=pending.category,
+        type=pending.transaction_type,
+        payment_method=pending.payment_method,
+        source="telegram",
+    )
+    chat_id = pending.chat_id
+    db.add(transaction)
+    db.delete(pending)
+    db.commit()
+    db.refresh(transaction)
+    await _confirmar_transacao(chat_id, transaction)
+    return transaction
+
+
+async def _criar_pendencia(
+    db: Session,
+    chat_id: str,
+    user_id: uuid.UUID,
+    extraida: gemini.TransacaoExtraida,
+    tipo: str | None,
+) -> None:
+    pending = _buscar_pendencia(db, chat_id)
+    if pending is None:
+        pending = PendingTransaction(user_id=user_id, chat_id=chat_id, awaiting="type")
+        db.add(pending)
+    pending.description = (extraida.descricao or "Lançamento via Telegram")[:255]
+    pending.amount = (
+        quantize_money(abs(Decimal(str(extraida.valor))))
+        if extraida.valor is not None
+        else None
+    )
+    pending.category = extraida.categoria or None
+    pending.transaction_type = tipo
+    pending.payment_method = extraida.metodo_pagamento or None
+    pending.awaiting = "type" if tipo is None else "amount"
+    pending.expires_at = datetime.now(UTC) + timedelta(minutes=CONFIRMATION_TTL_MINUTES)
+    db.commit()
+    if pending.awaiting == "type":
+        await _pedir_tipo(chat_id)
+    else:
+        await _pedir_valor(chat_id)
+
+
+async def _receber_valor_pendente(
+    db: Session, pending: PendingTransaction, text: str
+) -> None:
+    try:
+        amount = quantize_money(abs(decimal_from_value(text)))
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        await telegram_client.send_message(
+            pending.chat_id, "Valor inválido. Envie somente um valor positivo, como `42,90`."
+        )
+        return
+    pending.amount = amount
+    pending.expires_at = datetime.now(UTC) + timedelta(minutes=CONFIRMATION_TTL_MINUTES)
+    if pending.transaction_type is None:
+        pending.awaiting = "type"
+        db.commit()
+        await _pedir_tipo(pending.chat_id)
+    else:
+        await _concluir_pendencia(db, pending)
 
 
 async def _registrar_lancamento(
@@ -311,7 +471,10 @@ async def _registrar_lancamento(
         return
 
     tipo = _normalizar_tipo(extraida.tipo)
-    if not extraida.eh_transacao or extraida.valor is None or tipo is None:
+    if extraida.eh_transacao and (extraida.valor is None or tipo is None):
+        await _criar_pendencia(db, chat_id, user_id, extraida, tipo)
+        return
+    if not extraida.eh_transacao:
         await telegram_client.send_message(
             chat_id,
             extraida.observacao
@@ -320,15 +483,53 @@ async def _registrar_lancamento(
         return
 
     transacao = _persistir(db, user_id, extraida, tipo)
+    await _confirmar_transacao(chat_id, transacao)
 
-    sinal = "📈 Receita" if transacao.type == "income" else "📉 Despesa"
-    detalhes = [f"{sinal} registrada!", f"*{transacao.description}*", formatar_brl(transacao.amount)]
-    if transacao.category:
-        detalhes.append(f"🏷️ {transacao.category}")
-    if transacao.payment_method:
-        detalhes.append(f"💳 {transacao.payment_method}")
 
-    await telegram_client.send_message(chat_id, "\n".join(detalhes))
+async def _tratar_callback(db: Session, callback) -> None:
+    if callback.message is None or not callback.data:
+        await telegram_client.answer_callback_query(callback.id)
+        return
+    chat_id = str(callback.message.chat.id)
+    link = _buscar_vinculo(db, chat_id)
+    pending = _buscar_pendencia(db, chat_id)
+    if (
+        not _consentimento_valido(link)
+        or pending is None
+        or pending.user_id != link.user_id
+    ):
+        await telegram_client.answer_callback_query(callback.id, "Confirmação expirada")
+        await telegram_client.send_message(
+            chat_id, "Essa confirmação expirou. Envie o lançamento novamente."
+        )
+        return
+
+    data = callback.data
+    if data == "tx:cancel":
+        db.delete(pending)
+        db.commit()
+        await telegram_client.answer_callback_query(callback.id, "Lançamento cancelado")
+        await telegram_client.send_message(chat_id, "Lançamento cancelado.")
+        return
+    if data == "tx:amount":
+        pending.awaiting = "amount"
+        pending.expires_at = datetime.now(UTC) + timedelta(minutes=CONFIRMATION_TTL_MINUTES)
+        db.commit()
+        await telegram_client.answer_callback_query(callback.id)
+        await telegram_client.send_message(chat_id, "Envie agora apenas o valor, como `42,90`.")
+        return
+    if data in {"tx:type:income", "tx:type:expense"}:
+        pending.transaction_type = data.rsplit(":", 1)[-1]
+        pending.expires_at = datetime.now(UTC) + timedelta(minutes=CONFIRMATION_TTL_MINUTES)
+        await telegram_client.answer_callback_query(callback.id, "Tipo confirmado")
+        if pending.amount is None:
+            pending.awaiting = "amount"
+            db.commit()
+            await _pedir_valor(chat_id)
+        else:
+            await _concluir_pendencia(db, pending)
+        return
+    await telegram_client.answer_callback_query(callback.id, "Opção inválida")
 
 
 # --------------------------------------------------------------------------------------
@@ -353,6 +554,9 @@ async def _tratar_mensagem(db: Session, mensagem: TelegramMessage) -> None:
         if vinculo is None:
             await _pedir_vinculo(chat_id)
             return
+        if not _consentimento_valido(vinculo):
+            await _pedir_consentimento(chat_id)
+            return
 
         if comando == "/saldo":
             await _cmd_saldo(db, chat_id, vinculo.user_id, periodo=_normalizar_periodo(argumento))
@@ -364,6 +568,14 @@ async def _tratar_mensagem(db: Session, mensagem: TelegramMessage) -> None:
     vinculo = _buscar_vinculo(db, chat_id)
     if vinculo is None:
         await _pedir_vinculo(chat_id)
+        return
+    if not _consentimento_valido(vinculo):
+        await _pedir_consentimento(chat_id)
+        return
+
+    pending = _buscar_pendencia(db, chat_id)
+    if pending is not None and pending.awaiting == "amount" and texto:
+        await _receber_valor_pendente(db, pending, texto)
         return
 
     audio = mensagem.voice or mensagem.audio
@@ -392,24 +604,47 @@ async def _tratar_mensagem(db: Session, mensagem: TelegramMessage) -> None:
     )
 
 
-async def processar_update(update: TelegramUpdate) -> None:
+async def _processar_update_async(update: TelegramUpdate) -> None:
     """Ponto de entrada do webhook. Roda em background: nunca propaga exceção."""
     mensagem = update.message or update.edited_message
-    if mensagem is None:
+    callback = update.callback_query
+    if mensagem is None and callback is None:
         return
 
     db = SessionLocal()
     try:
-        await _tratar_mensagem(db, mensagem)
+        db.add(ProcessedTelegramUpdate(update_id=update.update_id))
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            logger.info("Update %s ignorado por já ter sido processado", update.update_id)
+            return
+        if callback is not None:
+            await _tratar_callback(db, callback)
+        elif mensagem is not None:
+            await _tratar_mensagem(db, mensagem)
     except Exception:  # noqa: BLE001 — o Telegram não deve receber erro e reenviar o update
         db.rollback()
         logger.exception("Falha ao processar update %s", update.update_id)
         try:
+            error_message = mensagem or (callback.message if callback else None)
+            if error_message is None:
+                return
             await telegram_client.send_message(
-                str(mensagem.chat.id),
+                str(error_message.chat.id),
                 "⚠️ Tive um problema ao processar sua mensagem. Tente novamente.",
             )
         except Exception:  # noqa: BLE001
-            logger.exception("Falha também ao notificar o chat %s", mensagem.chat.id)
+            logger.exception("Falha também ao notificar o chat")
     finally:
         db.close()
+
+
+def processar_update(update: TelegramUpdate) -> None:
+    """Executa o fluxo em uma thread com event loop privado.
+
+    Por ser uma BackgroundTask síncrona, o Starlette a envia ao thread pool.
+    Assim as chamadas SQLAlchemy/psycopg2 não bloqueiam o event loop da API.
+    """
+    asyncio.run(_processar_update_async(update))
