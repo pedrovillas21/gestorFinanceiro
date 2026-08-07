@@ -112,6 +112,12 @@ cd frontend
 npm run dev
 ```
 
+**Testes do backend** (não precisam de banco, `.env` nem chave de API):
+```powershell
+cd backend
+python -m pytest tests -q
+```
+
 ## Estrutura criada
 
 ```
@@ -127,9 +133,10 @@ gestorFinanceiro/
 │   │   ├── services/          # Bot API, Cascata do Gemini, regras do bot
 │   │   └── main.py            # FastAPI + lifespan (auto-run migrations)
 │   ├── scripts/               # setup do bot, criar usuário, gerar Deep Link
+│   ├── tests/                 # períodos do /saldo e contrato do JSON da IA
 │   ├── alembic/
 │   │   ├── env.py             # lê DATABASE_URL do .env, target_metadata = Base.metadata
-│   │   └── versions/          # 6ca4ec8a71fb (schema inicial)
+│   │   └── versions/          # 6ca4ec8a71fb (schema inicial), b75641c60d56 (RLS + índice)
 │   ├── alembic.ini
 │   ├── requirements.txt
 │   └── .env.example
@@ -147,4 +154,4 @@ gestorFinanceiro/
 - **Tela `conectar-telegram`** no front-end, para o vínculo sair do terminal.
 - **CRUD de transações** e dashboard.
 - **Hospedagem**, para o bot responder sem depender da máquina ligada — ver a análise em [resume/bot-telegram-status.md](resume/bot-telegram-status.md).
-- Opcional: token da Braapi, se for usar cotações da B3 (`BRAAPI_TOKEN`); sem ele, dá para usar só `yfinance`.
+- Opcional: token da [brapi](https://brapi.dev), se for usar cotações da B3 (`BRAAPI_TOKEN`); sem ele, dá para usar só `yfinance`.

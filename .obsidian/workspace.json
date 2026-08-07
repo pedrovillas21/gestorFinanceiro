@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "README.md",
+                "file": "resume/como-rodar-o-bot.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "README"
+              "title": "como-rodar-o-bot"
             }
           }
         ]
@@ -41,7 +41,9 @@
               "type": "file-explorer",
               "state": {
                 "sortOrder": "alphabetical",
-                "autoReveal": false
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
               },
               "icon": "lucide-folder-closed",
               "title": "Explorador de arquivos"
@@ -78,8 +80,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 200
   },
   "right": {
     "id": "7a1e225bb762bf27",
@@ -186,18 +187,20 @@
   },
   "active": "1ab8a2ba20e0a7a5",
   "lastOpenFiles": [
+    "backend/tests/__pycache__/conftest.cpython-312.pyc",
+    "backend/tests/conftest.py.tmp.7824.5185ce1be315",
+    "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md.tmp.7824.82e1f8bca94c",
+    "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md.tmp.7824.7dade0bd0c98",
+    "backend/app/services/telegram_bot.py.tmp.7824.9d1f205e860e",
+    "README.md.tmp.7824.dc5bb172533e",
+    "README.md.tmp.7824.356044c250f8",
+    "backend/requirements.txt.tmp.7824.5b1ce7ac6ebf",
+    "backend/tests/__pycache__/test_periodos.cpython-312-pytest-9.1.1.pyc",
+    "backend/tests/__pycache__/test_gemini_contrato.cpython-312-pytest-9.1.1.pyc",
+    "backend/venv/Lib/site-packages/_pytest/__pycache__/terminalprogress.cpython-312-pytest-9.1.1.pyc",
+    "README.md",
     "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md",
     "resume/como-rodar-o-bot.md",
-    "resume/bot-telegram-status.md.tmp.20956.b375abe051d0",
-    "README.md.tmp.20956.162f4106520d",
-    "README.md.tmp.20956.52e4a26b7ef8",
-    "backend/app/services/telegram_bot.py.tmp.20956.3ed83e4bf0f0",
-    "backend/app/services/telegram_bot.py.tmp.20956.7b10fe1490c3",
-    "backend/app/services/telegram_bot.py.tmp.20956.1881842d6eee",
-    "backend/app/services/telegram_bot.py.tmp.20956.849754428ae8",
-    "backend/app/services/gemini.py.tmp.20956.f809e9fe50f0",
-    "backend/app/services/gemini.py.tmp.20956.aa41f1253672",
-    "backend/alembic/versions/__pycache__/b75641c60d56_enable_row_level_security_and_balance_.cpython-312.pyc",
     "resume/bot-telegram-status.md"
   ]
 }
