@@ -56,30 +56,38 @@ def formatar_brl(valor: Decimal | float) -> str:
     return f"R$ {quantizado:,.2f}".replace(",", "\x00").replace(".", ",").replace("\x00", ".")
 
 
-def _inicio_do_dia() -> datetime:
+# O parâmetro `agora` existe para os testes fixarem a data; em produção todas
+# são chamadas sem argumento (ver a assinatura de `PERIODOS`).
+def _inicio_do_dia(agora: datetime | None = None) -> datetime:
     """Meia-noite de hoje no fuso de São Paulo, em UTC."""
-    agora = datetime.now(TZ)
+    agora = agora or datetime.now(TZ)
     return agora.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
 
 
-def _inicio_da_semana() -> datetime:
+def _inicio_da_semana(agora: datetime | None = None) -> datetime:
     """Meia-noite da segunda-feira da semana corrente no fuso de São Paulo, em UTC."""
-    agora = datetime.now(TZ)
+    agora = agora or datetime.now(TZ)
     inicio = agora - timedelta(days=agora.weekday())
     return inicio.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
 
 
-def _inicio_do_mes() -> datetime:
+def _inicio_do_mes(agora: datetime | None = None) -> datetime:
     """Primeiro instante do mês corrente no fuso de São Paulo, em UTC."""
-    agora = datetime.now(TZ)
+    agora = agora or datetime.now(TZ)
     return agora.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
 
 
-def _inicio_3_meses() -> datetime:
-    """Primeiro instante de 3 meses atrás (mês atual + 2 anteriores) no fuso de SP, em UTC."""
-    agora = datetime.now(TZ)
-    inicio = agora.replace(day=1, hour=0, minute=0, second=0, microsecond=0) - relativedelta(months=2)
-    return inicio.astimezone(UTC)
+def _inicio_3_meses(agora: datetime | None = None) -> datetime:
+    """Meia-noite do dia de 3 meses atrás, no fuso de São Paulo, em UTC.
+
+    É uma janela móvel de 3 meses contados da data de hoje — em 5 de agosto ela
+    começa em 5 de maio, não em 1º de junho. Quando o dia não existe no mês de
+    destino (31 de maio -> fevereiro), `relativedelta` encosta no último dia do
+    mês (28 ou 29 de fevereiro).
+    """
+    agora = agora or datetime.now(TZ)
+    inicio = agora - relativedelta(months=3)
+    return inicio.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(UTC)
 
 
 # Períodos aceitos por `/saldo` e pela consulta em linguagem natural via IA — as
@@ -105,7 +113,11 @@ _APELIDOS_PERIODO = {
 
 
 def _normalizar_periodo(argumento: str | None) -> str:
-    """Converte o argumento de `/saldo` (ou o `periodo_consulta` da IA) numa chave válida de `PERIODOS`."""
+    """Converte o argumento digitado em `/saldo <periodo>` numa chave válida de `PERIODOS`.
+
+    Vale só para o texto livre do comando: o `periodo_consulta` vindo da IA já é
+    validado contra a lista fechada no schema do Gemini.
+    """
     chave = (argumento or "").strip().lower()
     return _APELIDOS_PERIODO.get(chave, "mes")
 
@@ -292,7 +304,10 @@ async def _registrar_lancamento(
         return
 
     if extraida.eh_consulta_saldo:
-        await _cmd_saldo(db, chat_id, user_id, periodo=_normalizar_periodo(extraida.periodo_consulta))
+        # `periodo_consulta` já veio validado contra `PERIODOS` pelo schema do
+        # Gemini — não passa por `_normalizar_periodo`, que é para o texto livre
+        # digitado em "/saldo <periodo>".
+        await _cmd_saldo(db, chat_id, user_id, periodo=extraida.periodo_consulta)
         return
 
     tipo = _normalizar_tipo(extraida.tipo)

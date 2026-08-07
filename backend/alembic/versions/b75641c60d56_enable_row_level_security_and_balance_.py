@@ -52,21 +52,50 @@ def upgrade() -> None:
     # Consultas de saldo por período (dia/semana/mês/3 meses) filtram sempre
     # por user_id + intervalo de created_at — o índice em user_id sozinho não
     # ajuda a cortar o intervalo de datas.
-    op.drop_index(op.f("ix_transactions_user_id"), table_name="transactions")
-    op.create_index(
-        "ix_transactions_user_id_created_at",
-        "transactions",
-        ["user_id", "created_at"],
-        unique=False,
-    )
+    #
+    # CREATE/DROP INDEX comuns pegam lock de escrita em `transactions` até o
+    # índice terminar de ser construído; num banco em uso isso trava INSERT do
+    # bot. CONCURRENTLY evita o lock, mas o Postgres proíbe rodá-lo dentro de
+    # transação — daí o `autocommit_block()`, que suspende a transação da
+    # migration só neste trecho. O índice novo nasce antes do antigo morrer,
+    # para nenhuma consulta ficar sem índice no meio do caminho.
+    #
+    # Atenção ao re-rodar: como este bloco não é transacional, uma falha no meio
+    # pode deixar um índice INVALID para trás. Confira com
+    # `SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;` e derrube
+    # o inválido (`DROP INDEX CONCURRENTLY ...`) antes de tentar de novo.
+    with op.get_context().autocommit_block():
+        op.create_index(
+            "ix_transactions_user_id_created_at",
+            "transactions",
+            ["user_id", "created_at"],
+            unique=False,
+            postgresql_concurrently=True,
+        )
+        op.drop_index(
+            op.f("ix_transactions_user_id"),
+            table_name="transactions",
+            postgresql_concurrently=True,
+        )
 
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_index("ix_transactions_user_id_created_at", table_name="transactions")
-    op.create_index(
-        op.f("ix_transactions_user_id"), "transactions", ["user_id"], unique=False
-    )
+    # Mesma lógica do upgrade, na ordem inversa: recria o índice antigo antes de
+    # derrubar o composto, tudo CONCURRENTLY e fora da transação.
+    with op.get_context().autocommit_block():
+        op.create_index(
+            op.f("ix_transactions_user_id"),
+            "transactions",
+            ["user_id"],
+            unique=False,
+            postgresql_concurrently=True,
+        )
+        op.drop_index(
+            "ix_transactions_user_id_created_at",
+            table_name="transactions",
+            postgresql_concurrently=True,
+        )
 
     for tabela in reversed(TABELAS_COM_RLS):
         op.execute(f"ALTER TABLE {tabela} NO FORCE ROW LEVEL SECURITY")

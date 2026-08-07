@@ -6,10 +6,11 @@ quota, modelo removido), cai para o modelo estável configurado em `GEMINI_MODEL
 import json
 import logging
 from functools import lru_cache
+from typing import Literal, get_args
 
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.core.config import settings
 
@@ -32,8 +33,19 @@ CATEGORIAS = [
 METODOS_PAGAMENTO = ["pix", "dinheiro", "débito", "crédito", "boleto", "transferência"]
 
 # Períodos aceitos numa consulta de saldo — precisam bater com as chaves de
-# `PERIODOS` em app/services/telegram_bot.py.
-PERIODOS_SALDO = ["dia", "semana", "mes", "3meses"]
+# `PERIODOS` em app/services/telegram_bot.py. É um Literal (e não uma lista de
+# str) para que o valor entre no schema enviado ao Gemini como enum: um "ano"
+# ou qualquer outro período inventado é recusado na validação, em vez de virar
+# "mes" silenciosamente.
+PeriodoSaldo = Literal["dia", "semana", "mes", "3meses"]
+PERIODOS_SALDO: tuple[str, ...] = get_args(PeriodoSaldo)
+
+# Resposta ao usuário quando o Gemini responde, mas fora do contrato.
+OBSERVACAO_FORA_DO_CONTRATO = (
+    "🤔 Não consegui entender essa mensagem. Tente de novo dizendo o valor e o que foi "
+    "(ex.: “gastei 40 no mercado”) ou pergunte pelo saldo do dia, da semana, do mês ou "
+    "dos últimos 3 meses."
+)
 
 PROMPT = f"""Você é o motor de extração de um gestor financeiro pessoal brasileiro.
 Analise a mensagem do usuário (áudio ou texto) e devolva UM ÚNICO JSON.
@@ -52,11 +64,12 @@ Regras para LANÇAMENTO (ex.: "gastei 40 no mercado", "recebi 3500 de salário")
 
 Regras para CONSULTA DE SALDO (ex.: "quanto gastei hoje?", "qual meu saldo essa semana",
 "quanto recebi esse mês", "como estou nos últimos 3 meses"):
-- "eh_transacao": false.
+- "eh_transacao": false (nunca true junto com "eh_consulta_saldo").
 - "eh_consulta_saldo": true.
-- "periodo_consulta": escolha exatamente um entre {", ".join(PERIODOS_SALDO)}
+- "periodo_consulta": obrigatório, exatamente um entre {", ".join(PERIODOS_SALDO)}
   ("dia" = hoje, "semana" = semana atual, "mes" = mês atual, "3meses" = últimos 3 meses).
-  Se a mensagem não deixar claro o período, use "mes".
+  Se a mensagem não deixar claro o período, use "mes". Não invente outros períodos:
+  para "esse ano" ou qualquer intervalo fora da lista, use "3meses".
 
 Se a mensagem não for nem um lançamento nem uma pergunta de saldo, ou se um lançamento
 não tiver o valor claro, devolva "eh_transacao": false, "eh_consulta_saldo": false e
@@ -76,16 +89,36 @@ class TransacaoExtraida(BaseModel):
     eh_consulta_saldo: bool = Field(
         default=False, description="true se a mensagem for uma pergunta sobre saldo/gastos/receitas"
     )
-    periodo_consulta: str | None = Field(
+    periodo_consulta: PeriodoSaldo | None = Field(
         default=None, description='um entre "dia", "semana", "mes", "3meses"'
     )
     observacao: str | None = Field(
         default=None, description="Mensagem ao usuário quando não houver transação nem consulta"
     )
 
+    @model_validator(mode="after")
+    def _checar_coerencia(self) -> "TransacaoExtraida":
+        """Barra combinações que o resto do fluxo não sabe tratar.
+
+        Sem isto, uma consulta de saldo sem período (ou uma resposta que é
+        lançamento e consulta ao mesmo tempo) seguiria adiante e viraria uma
+        decisão silenciosa do bot.
+        """
+        if self.eh_transacao and self.eh_consulta_saldo:
+            raise ValueError(
+                "resposta não pode ser lançamento e consulta de saldo ao mesmo tempo"
+            )
+        if self.eh_consulta_saldo and self.periodo_consulta is None:
+            raise ValueError("consulta de saldo exige `periodo_consulta`")
+        return self
+
 
 class GeminiIndisponivelError(RuntimeError):
-    """Todos os modelos da cascata falharam."""
+    """Todos os modelos da cascata falharam (rede, quota, modelo removido)."""
+
+
+class RespostaForaDoContratoError(ValueError):
+    """O Gemini respondeu, mas o JSON não obedece ao schema combinado."""
 
 
 @lru_cache(maxsize=1)
@@ -104,15 +137,22 @@ def _config() -> types.GenerateContentConfig:
 
 
 def _parse(response) -> TransacaoExtraida:
-    """Aceita tanto o objeto já validado (`parsed`) quanto o JSON cru em `text`."""
-    parsed = getattr(response, "parsed", None)
-    if isinstance(parsed, TransacaoExtraida):
-        return parsed
-    if isinstance(parsed, dict):
-        return TransacaoExtraida.model_validate(parsed)
-    if not response.text:
-        raise ValueError("resposta vazia do Gemini")
-    return TransacaoExtraida.model_validate(json.loads(response.text))
+    """Aceita tanto o objeto já validado (`parsed`) quanto o JSON cru em `text`.
+
+    Qualquer desvio do schema vira `RespostaForaDoContratoError`, para a cascata
+    distinguir "o modelo não respondeu" de "o modelo respondeu bobagem".
+    """
+    try:
+        parsed = getattr(response, "parsed", None)
+        if isinstance(parsed, TransacaoExtraida):
+            return parsed
+        if isinstance(parsed, dict):
+            return TransacaoExtraida.model_validate(parsed)
+        if not response.text:
+            raise RespostaForaDoContratoError("resposta vazia do Gemini")
+        return TransacaoExtraida.model_validate(json.loads(response.text))
+    except (ValidationError, json.JSONDecodeError) as exc:
+        raise RespostaForaDoContratoError(str(exc)) from exc
 
 
 async def extrair_transacao(
@@ -134,6 +174,7 @@ async def extrair_transacao(
 
     modelos = [settings.GEMINI_MODEL_PRIMARY, settings.GEMINI_MODEL_FALLBACK]
     ultimo_erro: Exception | None = None
+    houve_resposta_fora_do_contrato = False
 
     for modelo in modelos:
         try:
@@ -143,9 +184,20 @@ async def extrair_transacao(
                 config=_config(),
             )
             return _parse(response)
+        except RespostaForaDoContratoError as exc:
+            # O modelo respondeu — tentar o próximo pode dar um JSON válido.
+            houve_resposta_fora_do_contrato = True
+            ultimo_erro = exc
+            logger.warning("Modelo %s respondeu fora do contrato: %s", modelo, exc)
         except Exception as exc:  # noqa: BLE001 — a cascata existe justamente para absorver
             ultimo_erro = exc
             logger.warning("Modelo %s falhou na cascata do Gemini: %s", modelo, exc)
+
+    if houve_resposta_fora_do_contrato:
+        # A IA está de pé, só não produziu um JSON utilizável: dizer "indisponível"
+        # seria mentira, e executar um período chutado seria pior ainda.
+        logger.error("Nenhum modelo devolveu JSON dentro do contrato: %s", ultimo_erro)
+        return TransacaoExtraida(eh_transacao=False, observacao=OBSERVACAO_FORA_DO_CONTRATO)
 
     raise GeminiIndisponivelError(
         f"Nenhum modelo da cascata respondeu ({', '.join(modelos)})"
