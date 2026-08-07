@@ -21,7 +21,7 @@ Este documento detalha o ecossistema completo de software, dependências, SDKs e
 | **Migrations Automáticas (Flyway equivalent)** | Alembic \+ SQLAlchemy | Alembic 1.13+ | Versionamento do schema, geração automática de scripts e execução auto-run na inicialização da API. |
 | **Motor de IA** | Google GenAI SDK (google-genai) | Mais recente | Integração nativa com a Cascata do Gemini (Gemini Flash Recente → 2.5 Flash). |
 | **Túnel Webhook Local** | Ngrok ou Cloudflare Tunnels | Mais recente | Exposição do localhost:8000 em HTTPS para testes de webhook no Telegram. |
-| **API do Mercado** | Braapi / yfinance | Mais recente | Cotações das ações da B3 e carteira de ativos em tempo real. |
+| **API do Mercado** | brapi / yfinance | Mais recente | Cotações das ações da B3 e carteira de ativos em tempo real. |
 
 ## **3\. Estratégia de Migrations Automáticas com Alembic (Equivalente ao Flyway)**
 

@@ -41,7 +41,9 @@
               "type": "file-explorer",
               "state": {
                 "sortOrder": "alphabetical",
-                "autoReveal": false
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
               },
               "icon": "lucide-folder-closed",
               "title": "Explorador de arquivos"
@@ -78,8 +80,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 200
   },
   "right": {
     "id": "7a1e225bb762bf27",
@@ -95,7 +96,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "resume/como-rodar-o-bot.md",
+                "file": "README.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -105,7 +106,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Links inversos para como-rodar-o-bot"
+              "title": "Links inversos para README"
             }
           },
           {
@@ -114,12 +115,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "resume/como-rodar-o-bot.md",
+                "file": "README.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "Links de saída para como-rodar-o-bot"
+              "title": "Links de saída para README"
             }
           },
           {
@@ -157,13 +158,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "resume/como-rodar-o-bot.md",
+                "file": "README.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Sumário de como-rodar-o-bot"
+              "title": "Sumário de README"
             }
           }
         ]
@@ -186,6 +187,20 @@
   },
   "active": "1ab8a2ba20e0a7a5",
   "lastOpenFiles": [
+    "backend/tests/__pycache__/conftest.cpython-312.pyc",
+    "backend/tests/conftest.py.tmp.7824.5185ce1be315",
+    "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md.tmp.7824.82e1f8bca94c",
+    "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md.tmp.7824.7dade0bd0c98",
+    "backend/app/services/telegram_bot.py.tmp.7824.9d1f205e860e",
+    "README.md.tmp.7824.dc5bb172533e",
+    "README.md.tmp.7824.356044c250f8",
+    "backend/requirements.txt.tmp.7824.5b1ce7ac6ebf",
+    "backend/tests/__pycache__/test_periodos.cpython-312-pytest-9.1.1.pyc",
+    "backend/tests/__pycache__/test_gemini_contrato.cpython-312-pytest-9.1.1.pyc",
+    "backend/venv/Lib/site-packages/_pytest/__pycache__/terminalprogress.cpython-312-pytest-9.1.1.pyc",
+    "README.md",
+    "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md",
+    "resume/como-rodar-o-bot.md",
     "resume/bot-telegram-status.md"
   ]
 }
