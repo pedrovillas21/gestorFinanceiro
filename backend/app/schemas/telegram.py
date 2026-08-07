@@ -3,6 +3,8 @@
 Só mapeamos os campos que o fluxo do bot usa; `extra="ignore"` garante que
 qualquer campo novo enviado pelo Telegram seja descartado sem quebrar o webhook.
 """
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -43,7 +45,32 @@ class TelegramMessage(TelegramBase):
     audio: TelegramFile | None = None
 
 
+class TelegramCallbackQuery(TelegramBase):
+    id: str
+    from_user: TelegramUser = Field(alias="from")
+    message: TelegramMessage | None = None
+    data: str | None = None
+
+
 class TelegramUpdate(TelegramBase):
     update_id: int
     message: TelegramMessage | None = None
     edited_message: TelegramMessage | None = None
+    callback_query: TelegramCallbackQuery | None = None
+
+
+class TelegramLinkRequest(BaseModel):
+    consent: bool
+
+
+class TelegramLinkResponse(BaseModel):
+    deep_link: str
+    expires_at: datetime
+    consent_version: str
+
+
+class TelegramLinkStatus(BaseModel):
+    linked: bool
+    linked_at: datetime | None
+    consent_version: str | None
+    consented_at: datetime | None

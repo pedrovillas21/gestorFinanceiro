@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,9 @@ from app.database import Base
 
 class Transaction(Base):
     __tablename__ = "transactions"
+    __table_args__ = (
+        Index("ix_transactions_user_id_occurred_at", "user_id", "occurred_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -29,4 +32,9 @@ class Transaction(Base):
     payment_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Origem do lançamento: "web" | "telegram"
     source: Mapped[str] = mapped_column(String(20), nullable=False, server_default="web")
+    # Data efetiva do lançamento. `created_at` continua sendo apenas auditoria
+    # de quando a linha entrou no sistema.
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

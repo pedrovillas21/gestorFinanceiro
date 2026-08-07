@@ -53,3 +53,15 @@ def test_lancamento_simples_continua_valido() -> None:
 def test_mensagem_sem_transacao_nem_consulta_continua_valida() -> None:
     extraida = TransacaoExtraida(eh_transacao=False, observacao="não entendi")
     assert extraida.observacao == "não entendi"
+
+
+def test_lancamento_parcial_pode_ir_para_confirmacao() -> None:
+    extraida = TransacaoExtraida(
+        eh_transacao=True,
+        tipo=None,
+        valor=42.90,
+        descricao="mercado",
+        observacao="tipo incerto",
+    )
+    assert extraida.eh_transacao
+    assert extraida.tipo is None

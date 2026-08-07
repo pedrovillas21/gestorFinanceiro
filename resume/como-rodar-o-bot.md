@@ -72,7 +72,7 @@ Depois da primeira vez, o `lifespan` do FastAPI aplica migrations novas sozinho 
 
 ### 1.5. Criar seu usuário
 
-Ainda não existe endpoint de cadastro, então use o script:
+Hoje existe `POST /api/v1/auth/register`; para o fluxo administrativo por terminal, use o script:
 
 ```bash
 ./venv/Scripts/python.exe scripts/criar_usuario.py --email voce@exemplo.com --nome "Seu Nome"
@@ -244,7 +244,7 @@ from app.models.telegram_token import TelegramToken
 db = SessionLocal()
 v = db.scalars(select(TelegramToken)).first()
 print('vínculo:', v.chat_id if v else '(nenhum)')
-for x in db.scalars(select(Transaction).order_by(Transaction.created_at)).all():
+for x in db.scalars(select(Transaction).order_by(Transaction.occurred_at)).all():
     print(f'[{x.type}] {x.description} | R\$ {x.amount} | {x.category} | {x.payment_method}')
 db.close()"
 ```
