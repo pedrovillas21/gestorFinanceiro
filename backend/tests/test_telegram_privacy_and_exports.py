@@ -4,6 +4,7 @@ from decimal import Decimal
 from io import BytesIO, StringIO
 from types import SimpleNamespace
 
+import pytest
 from openpyxl import load_workbook
 
 from app.core.config import settings
@@ -63,21 +64,27 @@ def test_only_the_current_published_policy_is_valid_consent() -> None:
     assert not _consentimento_valido(stale)
 
 
-def test_link_generation_rejects_unpublished_policy_before_database_access() -> None:
+def test_link_generation_rejects_unpublished_policy_before_database_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class UntouchedDb:
         def scalars(self, statement):
             raise AssertionError("o banco não deve ser acessado")
 
-    try:
+    def unpublished_policy(version: str) -> None:
+        assert version == settings.PRIVACY_POLICY_VERSION
+        raise KeyError(version)
+
+    monkeypatch.setattr(
+        "app.services.telegram_bot.get_privacy_policy", unpublished_policy
+    )
+
+    with pytest.raises(ValueError, match="não foi publicada"):
         criar_link_token(
             UntouchedDb(),
             SimpleNamespace(),
-            consent_version="versao-inventada",
+            consent_version=settings.PRIVACY_POLICY_VERSION,
         )
-    except ValueError as exc:
-        assert "vigente" in str(exc)
-    else:
-        raise AssertionError("uma política desconhecida não pode gerar link")
 
 
 def _formula_transaction():
@@ -103,7 +110,7 @@ def test_csv_export_escapes_formula_prefixes() -> None:
 def test_xlsx_export_escapes_formula_prefixes() -> None:
     workbook = load_workbook(BytesIO(export_xlsx([_formula_transaction()])))
     try:
-        row = list(workbook.active.iter_rows(min_row=2, max_row=2))[0]
+        row = next(workbook.active.iter_rows(min_row=2, max_row=2))
         assert row[2].value.startswith("'=")
         assert row[4].value.startswith("'+")
         assert row[5].value.startswith("'@")

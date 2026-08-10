@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import and_, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, undefer
 
 from app.core.money import quantize_money
 from app.database import SessionLocal
@@ -195,6 +195,7 @@ def process_import_job(job_id: uuid.UUID, user_id: uuid.UUID) -> bool:
         now = datetime.now(UTC)
         job = db.scalar(
             select(ImportJob)
+            .options(undefer(ImportJob.content))
             .where(
                 ImportJob.id == job_id,
                 ImportJob.user_id == user_id,

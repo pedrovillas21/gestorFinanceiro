@@ -23,13 +23,29 @@ O startup também executa `alembic upgrade head`. Use uma `DATABASE_URL` do pape
 - `/api/v1/calculators/compound-interest`: simulação mensal de juros compostos.
 
 Envie o JWT em `Authorization: Bearer <token>`. Dinheiro, quantidades, preços e taxas são strings decimais no JSON.
-Antes de gerar o Deep Link, consulte `GET /api/v1/telegram/privacy-policy`. O texto
-oficial, seu hash e a URL imutável da versão são retornados sem autenticação. Depois
-do aceite, envie `{"consent": true, "consent_version": "2026-08-10"}` para
-`POST /api/v1/telegram/link`. O servidor rejeita versões diferentes da política
-vigente e só registra versões que tenham conteúdo publicado.
 
-O script administrativo também exige aceite explícito e não possui versão padrão:
+## Telegram — gerar o Deep Link
+
+Consulte `GET /api/v1/telegram/privacy-policy` antes de qualquer aceite: ele devolve o
+texto oficial, o hash e a URL imutável da versão, sem exigir autenticação. Pela API, o
+aceite vai em `{"consent": true, "consent_version": "2026-08-10"}` para
+`POST /api/v1/telegram/link`. O servidor recusa versões diferentes da política vigente e
+só registra versões que tenham conteúdo publicado.
+
+O script administrativo exige aceite explícito e **não tem versão padrão**: os dois
+argumentos abaixo são obrigatórios. A versão precisa ser idêntica à
+`PRIVACY_POLICY_VERSION` em vigor (hoje `2026-08-10`).
+
+Git Bash / MINGW64:
+
+```bash
+./venv/Scripts/python.exe scripts/gerar_link_telegram.py \
+  --email voce@exemplo.com \
+  --consent-version 2026-08-10 \
+  --confirm-privacy-consent
+```
+
+PowerShell:
 
 ```powershell
 .\venv\Scripts\python.exe scripts\gerar_link_telegram.py `
@@ -37,6 +53,14 @@ O script administrativo também exige aceite explícito e não possui versão pa
   --consent-version 2026-08-10 `
   --confirm-privacy-consent
 ```
+
+Copie a URL inteira em vez de clicar: o token é longo e o terminal costuma truncá-lo na
+quebra de linha. Cada execução invalida o link gerado antes.
+
+Vínculos aceitos sob uma versão anterior deixam de valer assim que
+`PRIVACY_POLICY_VERSION` muda — o bot passa a pedir uma nova conexão, e é preciso rodar
+o script de novo. Publicar uma política nova, portanto, desconecta todo mundo por
+construção.
 
 ## Planilhas
 

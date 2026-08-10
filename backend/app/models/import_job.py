@@ -27,7 +27,9 @@ class ImportJob(Base):
     total_rows: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     imported_rows: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    content: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    content: Mapped[bytes | None] = mapped_column(
+        LargeBinary, nullable=True, deferred=True
+    )
     processing_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
