@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -30,6 +30,7 @@ def _parse_datetime(value: object) -> datetime:
 
 
 async def fetch_brapi_quotes(tickers: list[str]) -> dict[str, FetchedQuote]:
+    """Fetch quotes keyed by stripped, upper-case ticker symbols."""
     symbols = sorted({ticker.strip().upper() for ticker in tickers if ticker.strip()})
     if not symbols:
         return {}
@@ -50,19 +51,27 @@ async def fetch_brapi_quotes(tickers: list[str]) -> dict[str, FetchedQuote]:
         raise MarketProviderError("não foi possível consultar a brapi") from exc
 
     result: dict[str, FetchedQuote] = {}
-    requested_at = _parse_datetime(payload.get("requestedAt"))
-    for item in payload.get("results", []):
-        data = item.get("data") or {}
-        ticker = str(item.get("symbol") or item.get("requestedSymbol") or "").upper()
-        raw_price = data.get("regularMarketPrice")
-        if not ticker or raw_price is None:
-            continue
-        result[ticker] = FetchedQuote(
-            ticker=ticker,
-            price=Decimal(str(raw_price)),
-            currency=str(data.get("currency") or "BRL").upper(),
-            collected_at=_parse_datetime(data.get("regularMarketTime"))
-            if data.get("regularMarketTime")
-            else requested_at,
-        )
+    try:
+        requested_at = _parse_datetime(payload.get("requestedAt"))
+        for item in payload.get("results", []):
+            data = item.get("data") or {}
+            ticker = str(
+                item.get("symbol") or item.get("requestedSymbol") or ""
+            ).strip().upper()
+            raw_price = data.get("regularMarketPrice")
+            if not ticker or raw_price is None:
+                continue
+            price = Decimal(str(raw_price))
+            if not price.is_finite():
+                raise InvalidOperation
+            result[ticker] = FetchedQuote(
+                ticker=ticker,
+                price=price,
+                currency=str(data.get("currency") or "BRL").upper(),
+                collected_at=_parse_datetime(data.get("regularMarketTime"))
+                if data.get("regularMarketTime")
+                else requested_at,
+            )
+    except (AttributeError, InvalidOperation, TypeError, ValueError) as exc:
+        raise MarketProviderError("a brapi retornou uma cotacao invalida") from exc
     return result

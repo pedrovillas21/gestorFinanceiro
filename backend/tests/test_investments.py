@@ -15,6 +15,8 @@ from app.services.investments import (
     calculate_xirr,
 )
 from app.services import market
+from app.services import quote_refresh
+from app.services.market import FetchedQuote, MarketProviderError
 
 
 NOW = datetime(2025, 1, 1, tzinfo=UTC)
@@ -179,3 +181,128 @@ def test_brapi_v2_quote_contract(monkeypatch) -> None:
     assert captured["headers"]["Authorization"].startswith("Bearer ")
     assert quotes["PETR4"].price == Decimal("38.5")
     assert quotes["PETR4"].collected_at == datetime(2026, 8, 7, 15, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "requested_at, market_time, price",
+    [
+        ("not-a-date", None, "38.5"),
+        ("2026-08-07T15:00:01Z", "not-a-date", "38.5"),
+        ("2026-08-07T15:00:01Z", None, "not-a-number"),
+        ("2026-08-07T15:00:01Z", None, "NaN"),
+    ],
+)
+def test_brapi_invalid_provider_values_raise_market_provider_error(
+    monkeypatch, requested_at, market_time, price
+) -> None:
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "requestedAt": requested_at,
+                "results": [
+                    {
+                        "symbol": "PETR4",
+                        "data": {
+                            "regularMarketPrice": price,
+                            "regularMarketTime": market_time,
+                        },
+                    }
+                ],
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def get(self, url, *, params, headers):
+            return FakeResponse()
+
+    monkeypatch.setattr(market.httpx, "AsyncClient", FakeClient)
+
+    with pytest.raises(MarketProviderError):
+        asyncio.run(market.fetch_brapi_quotes(["PETR4"]))
+
+
+class QuoteRefreshDb:
+    def __init__(self, asset, latest_quote=None):
+        self.asset = asset
+        self.latest_quote = latest_quote
+        self.added = []
+        self.flushes = 0
+        self.commits = 0
+
+    def scalars(self, statement):
+        return SimpleNamespace(all=lambda: [self.asset])
+
+    def scalar(self, statement):
+        return self.latest_quote
+
+    def add(self, item):
+        self.added.append(item)
+
+    def flush(self):
+        self.flushes += 1
+
+    def commit(self):
+        self.commits += 1
+
+
+def test_quote_refresh_normalizes_stored_ticker_before_lookup(monkeypatch) -> None:
+    asset = SimpleNamespace(id="asset-id", ticker=" petr4 ")
+    db = QuoteRefreshDb(asset)
+    collected_at = datetime(2026, 8, 7, 15, tzinfo=UTC)
+
+    async def fake_fetch(tickers):
+        return {
+            "PETR4": FetchedQuote("PETR4", Decimal("38.5"), "BRL", collected_at)
+        }
+
+    snapshots = []
+    monkeypatch.setattr(quote_refresh, "fetch_brapi_quotes", fake_fetch)
+    monkeypatch.setattr(
+        quote_refresh,
+        "_create_snapshot",
+        lambda *args: snapshots.append(args),
+    )
+
+    result = quote_refresh.refresh_user_quotes(db, "user-id")
+
+    assert result.updated == 1
+    assert result.failed_tickers == []
+    assert len(db.added) == 1
+    assert len(snapshots) == 1
+
+
+def test_quote_refresh_skips_duplicate_quote_and_snapshot(monkeypatch) -> None:
+    asset = SimpleNamespace(id="asset-id", ticker="PETR4")
+    collected_at = datetime(2026, 8, 7, 15, tzinfo=UTC)
+    db = QuoteRefreshDb(asset, SimpleNamespace(collected_at=collected_at))
+
+    async def fake_fetch(tickers):
+        return {
+            "PETR4": FetchedQuote("PETR4", Decimal("38.5"), "BRL", collected_at)
+        }
+
+    monkeypatch.setattr(quote_refresh, "fetch_brapi_quotes", fake_fetch)
+    monkeypatch.setattr(
+        quote_refresh,
+        "_create_snapshot",
+        lambda *args: pytest.fail("duplicate quote must not create a snapshot"),
+    )
+
+    result = quote_refresh.refresh_user_quotes(db, "user-id")
+
+    assert result.updated == 0
+    assert result.failed_tickers == []
+    assert db.added == []
+    assert db.flushes == 0
+    assert db.commits == 1

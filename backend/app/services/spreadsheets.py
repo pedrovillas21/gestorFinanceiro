@@ -1,15 +1,17 @@
 """Importação e exportação de transações sem executar pandas no event loop."""
 
+import asyncio
 import csv
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO, StringIO
+import logging
 from pathlib import Path
 import uuid
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.money import quantize_money
@@ -19,6 +21,10 @@ from app.models.transaction import Transaction
 
 
 TZ = ZoneInfo("America/Sao_Paulo")
+MAX_IMPORT_ROWS = 10_000
+IMPORT_JOB_LEASE = timedelta(minutes=5)
+IMPORT_WORKER_POLL_SECONDS = 1.0
+logger = logging.getLogger(__name__)
 COLUMN_ALIASES = {
     "description": ("description", "descricao", "descrição"),
     "amount": ("amount", "valor"),
@@ -64,7 +70,18 @@ def _parse_datetime(value: object) -> datetime:
     return result.astimezone(UTC)
 
 
-def _csv_rows(content: bytes) -> list[dict[object, object]]:
+def _limited_rows(rows, *, max_rows: int = MAX_IMPORT_ROWS) -> list:
+    limited = []
+    for row_number, row in enumerate(rows, start=1):
+        if row_number > max_rows:
+            raise ValueError(f"arquivo excede o limite de {max_rows} linhas")
+        limited.append(row)
+    return limited
+
+
+def _csv_rows(
+    content: bytes, *, max_rows: int = MAX_IMPORT_ROWS
+) -> list[dict[object, object]]:
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -74,25 +91,37 @@ def _csv_rows(content: bytes) -> list[dict[object, object]]:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;")
     except csv.Error:
         dialect = csv.excel
-    return list(csv.DictReader(StringIO(text), dialect=dialect))
+    return _limited_rows(
+        csv.DictReader(StringIO(text), dialect=dialect), max_rows=max_rows
+    )
 
 
-def _xlsx_rows(content: bytes) -> list[dict[object, object]]:
+def _xlsx_rows(
+    content: bytes, *, max_rows: int = MAX_IMPORT_ROWS
+) -> list[dict[object, object]]:
     workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
-    sheet = workbook.active
-    rows = sheet.iter_rows(values_only=True)
-    headers = next(rows, None)
-    if not headers:
-        return []
-    return [dict(zip(headers, values, strict=False)) for values in rows]
+    try:
+        sheet = workbook.active
+        rows = sheet.iter_rows(values_only=True)
+        headers = next(rows, None)
+        if not headers:
+            return []
+        return _limited_rows(
+            (dict(zip(headers, values, strict=False)) for values in rows),
+            max_rows=max_rows,
+        )
+    finally:
+        workbook.close()
 
 
-def parse_rows(content: bytes, filename: str) -> list[dict[str, object]]:
+def parse_rows(
+    content: bytes, filename: str, *, max_rows: int = MAX_IMPORT_ROWS
+) -> list[dict[str, object]]:
     suffix = Path(filename).suffix.lower()
     if suffix == ".csv":
-        source_rows = _csv_rows(content)
+        source_rows = _csv_rows(content, max_rows=max_rows)
     elif suffix == ".xlsx":
-        source_rows = _xlsx_rows(content)
+        source_rows = _xlsx_rows(content, max_rows=max_rows)
     else:
         raise ValueError("formato não suportado; envie CSV ou XLSX")
 
@@ -126,33 +155,78 @@ def parse_rows(content: bytes, filename: str) -> list[dict[str, object]]:
 
 
 def import_transactions(
-    db: Session, user_id: uuid.UUID, content: bytes, filename: str
+    db: Session,
+    user_id: uuid.UUID,
+    content: bytes,
+    filename: str,
+    *,
+    commit: bool = True,
 ) -> tuple[int, int]:
     rows = parse_rows(content, filename)
     for row in rows:
         db.add(Transaction(user_id=user_id, source="import", **row))
-    db.commit()
+    if commit:
+        db.commit()
     return len(rows), len(rows)
 
 
-def process_import_job(
-    job_id: uuid.UUID, user_id: uuid.UUID, content: bytes, filename: str
-) -> None:
+def _recoverable_job_filter(now: datetime):
+    stale_before = now - IMPORT_JOB_LEASE
+    return or_(
+        ImportJob.status == "pending",
+        and_(
+            ImportJob.status == "processing",
+            or_(
+                ImportJob.processing_started_at.is_(None),
+                ImportJob.processing_started_at < stale_before,
+            ),
+        ),
+    )
+
+
+def process_import_job(job_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+    """Claims and processes one durable import job.
+
+    The imported transactions and terminal job state share one commit, so a
+    process crash cannot leave committed rows behind for a later retry to copy.
+    """
     db = SessionLocal()
     try:
-        job = db.get(ImportJob, job_id)
-        if job is None or job.user_id != user_id:
-            return
+        now = datetime.now(UTC)
+        job = db.scalar(
+            select(ImportJob)
+            .where(
+                ImportJob.id == job_id,
+                ImportJob.user_id == user_id,
+                _recoverable_job_filter(now),
+            )
+            .with_for_update(skip_locked=True)
+        )
+        if job is None:
+            return False
+        content = job.content
+        filename = job.filename
+        if content is None:
+            job.status = "failed"
+            job.error_message = "Conteúdo da importação não está disponível"
+            job.completed_at = now
+            db.commit()
+            return True
         job.status = "processing"
+        job.processing_started_at = now
+        job.attempt_count += 1
         db.commit()
         try:
-            total, imported = import_transactions(db, user_id, content, filename)
+            rows = parse_rows(content, filename)
             job = db.get(ImportJob, job_id)
             if job is not None:
+                for row in rows:
+                    db.add(Transaction(user_id=user_id, source="import", **row))
                 job.status = "completed"
-                job.total_rows = total
-                job.imported_rows = imported
+                job.total_rows = len(rows)
+                job.imported_rows = len(rows)
                 job.completed_at = datetime.now(UTC)
+                job.content = None
                 db.commit()
         except Exception as exc:  # o estado do job precisa registrar qualquer falha
             db.rollback()
@@ -161,9 +235,55 @@ def process_import_job(
                 job.status = "failed"
                 job.error_message = str(exc)[:2000]
                 job.completed_at = datetime.now(UTC)
+                job.content = None
                 db.commit()
+        return True
     finally:
         db.close()
+
+
+def process_next_import_job() -> bool:
+    db = SessionLocal()
+    try:
+        now = datetime.now(UTC)
+        candidate = db.execute(
+            select(ImportJob.id, ImportJob.user_id)
+            .where(_recoverable_job_filter(now))
+            .order_by(ImportJob.created_at)
+            .limit(1)
+        ).first()
+    finally:
+        db.close()
+    if candidate is None:
+        return False
+    return process_import_job(candidate.id, candidate.user_id)
+
+
+async def run_import_worker(stop_event: asyncio.Event) -> None:
+    """Continuously recovers pending jobs and jobs abandoned after a crash."""
+    while not stop_event.is_set():
+        try:
+            processed = await asyncio.to_thread(process_next_import_job)
+        except Exception:
+            logger.exception("Falha ao consultar a fila durável de importações")
+            processed = False
+        if processed:
+            continue
+        try:
+            await asyncio.wait_for(
+                stop_event.wait(), timeout=IMPORT_WORKER_POLL_SECONDS
+            )
+        except TimeoutError:
+            pass
+
+
+def _escape_spreadsheet_formula(value: str | None) -> str:
+    """Mantém texto controlado pelo usuário inerte em CSV e XLSX."""
+    if not value:
+        return ""
+    if value.startswith(("=", "+", "-", "@", "\t", "\r", "\n")):
+        return f"'{value}"
+    return value
 
 
 def export_csv(transactions: list[Transaction]) -> bytes:
@@ -175,10 +295,10 @@ def export_csv(transactions: list[Transaction]) -> bytes:
             [
                 item.occurred_at.isoformat(),
                 item.type,
-                item.description,
+                _escape_spreadsheet_formula(item.description),
                 str(item.amount),
-                item.category or "",
-                item.payment_method or "",
+                _escape_spreadsheet_formula(item.category),
+                _escape_spreadsheet_formula(item.payment_method),
             ]
         )
     return output.getvalue().encode("utf-8-sig")
@@ -193,10 +313,10 @@ def export_xlsx(transactions: list[Transaction]) -> bytes:
             [
                 item.occurred_at.replace(tzinfo=None),
                 item.type,
-                item.description,
+                _escape_spreadsheet_formula(item.description),
                 str(item.amount),
-                item.category or "",
-                item.payment_method or "",
+                _escape_spreadsheet_formula(item.category),
+                _escape_spreadsheet_formula(item.payment_method),
             ]
         )
     output = BytesIO()

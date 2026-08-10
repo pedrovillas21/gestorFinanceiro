@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.money import decimal_from_value, quantize_money
+from app.core.privacy import get_privacy_policy, has_privacy_policy
 from app.database import SessionLocal
 from app.models.telegram_token import TelegramToken
 from app.models.transaction import Transaction
@@ -137,12 +138,19 @@ def montar_deep_link(link_token: str) -> str:
 
 
 def criar_link_token(
-    db: Session, user_id: uuid.UUID, *, consent_version: str | None = None
+    db: Session, user_id: uuid.UUID, *, consent_version: str
 ) -> str:
     """Gera (ou renova) o token de vínculo de um usuário para uso no Deep Link.
 
     Chamado pela aplicação Web / pelo script `scripts/gerar_link_telegram.py`.
     """
+    if consent_version != settings.PRIVACY_POLICY_VERSION:
+        raise ValueError("a versão aceita não é a política de privacidade vigente")
+    try:
+        get_privacy_policy(consent_version)
+    except KeyError as exc:
+        raise ValueError("a política de privacidade informada não foi publicada") from exc
+
     vinculo = db.scalars(
         select(TelegramToken).where(TelegramToken.user_id == user_id)
     ).one_or_none()
@@ -151,11 +159,8 @@ def criar_link_token(
         vinculo = TelegramToken(user_id=user_id)
         db.add(vinculo)
 
-    if consent_version:
-        vinculo.privacy_consent_version = consent_version
-        vinculo.privacy_consented_at = datetime.now(UTC)
-    if vinculo.privacy_consented_at is None or not vinculo.privacy_consent_version:
-        raise ValueError("é necessário registrar o consentimento de privacidade")
+    vinculo.privacy_consent_version = consent_version
+    vinculo.privacy_consented_at = datetime.now(UTC)
 
     vinculo.link_token = secrets.token_urlsafe(24)
     vinculo.link_token_expires_at = datetime.now(UTC) + timedelta(
@@ -175,7 +180,8 @@ def _consentimento_valido(link: TelegramToken | None) -> bool:
     return bool(
         link
         and link.privacy_consented_at is not None
-        and link.privacy_consent_version
+        and link.privacy_consent_version == settings.PRIVACY_POLICY_VERSION
+        and has_privacy_policy(settings.PRIVACY_POLICY_VERSION)
     )
 
 
@@ -326,6 +332,11 @@ def _buscar_pendencia(db: Session, chat_id: str) -> PendingTransaction | None:
     pending = db.scalar(
         select(PendingTransaction).where(PendingTransaction.chat_id == chat_id)
     )
+    if pending is not None and pending.expires_at <= datetime.now(UTC):
+        db.delete(pending)
+        db.commit()
+        return None
+    return pending
 
 
 async def _pedir_consentimento(chat_id: str) -> None:
@@ -335,11 +346,6 @@ async def _pedir_consentimento(chat_id: str) -> None:
         f"Acesse {settings.WEB_APP_URL}/conectar-telegram, leia a política e gere "
         "um novo link para continuar.",
     )
-    if pending is not None and pending.expires_at <= datetime.now(UTC):
-        db.delete(pending)
-        db.commit()
-        return None
-    return pending
 
 
 async def _pedir_tipo(chat_id: str) -> None:

@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from hashlib import sha256
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -29,6 +30,17 @@ def test_auth_transactions_dashboard_and_tenant_isolation() -> None:
     app.dependency_overrides[get_db] = override_db
     client = TestClient(app)
     try:
+        privacy_policy = client.get("/api/v1/telegram/privacy-policy")
+        assert privacy_policy.status_code == 200
+        policy = privacy_policy.json()
+        assert policy["version"] == "2026-08-10"
+        assert policy["content_sha256"] == sha256(
+            policy["content"].encode("utf-8")
+        ).hexdigest()
+        immutable_policy = client.get(policy["privacy_policy_url"])
+        assert immutable_policy.status_code == 200
+        assert immutable_policy.json() == policy
+
         register = client.post(
             "/api/v1/auth/register",
             json={
@@ -41,11 +53,24 @@ def test_auth_transactions_dashboard_and_tenant_isolation() -> None:
         headers = {"Authorization": f"Bearer {register.json()['access_token']}"}
 
         telegram_link = client.post(
-            "/api/v1/telegram/link", headers=headers, json={"consent": True}
+            "/api/v1/telegram/link",
+            headers=headers,
+            json={"consent": True, "consent_version": policy["version"]},
         )
         assert telegram_link.status_code == 200
-        assert telegram_link.json()["consent_version"] == "test-v1"
+        assert telegram_link.json()["consent_version"] == policy["version"]
+        assert (
+            telegram_link.json()["privacy_policy_url"]
+            == policy["privacy_policy_url"]
+        )
         assert telegram_link.json()["deep_link"].startswith("https://t.me/bot_de_teste")
+
+        stale_consent = client.post(
+            "/api/v1/telegram/link",
+            headers=headers,
+            json={"consent": True, "consent_version": "versao-antiga"},
+        )
+        assert stale_consent.status_code == 409
 
         created = client.post(
             "/api/v1/transactions",

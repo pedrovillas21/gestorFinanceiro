@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     TELEGRAM_WEBHOOK_URL: str | None = None
     # Validade (em minutos) do token de vínculo gerado para o Deep Link
     TELEGRAM_LINK_TOKEN_TTL_MINUTES: int = 30
-    PRIVACY_POLICY_VERSION: str = "2026-08-07"
+    PRIVACY_POLICY_VERSION: str = "2026-08-10"
 
     # Front-end (link enviado ao usuário ainda não vinculado)
     WEB_APP_URL: str = "http://localhost:3000"

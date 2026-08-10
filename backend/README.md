@@ -23,8 +23,20 @@ O startup também executa `alembic upgrade head`. Use uma `DATABASE_URL` do pape
 - `/api/v1/calculators/compound-interest`: simulação mensal de juros compostos.
 
 Envie o JWT em `Authorization: Bearer <token>`. Dinheiro, quantidades, preços e taxas são strings decimais no JSON.
-Para gerar o Deep Link, envie `{"consent": true}`; a versão gravada vem de
-`PRIVACY_POLICY_VERSION` no servidor, não de um valor escolhido pelo cliente.
+Antes de gerar o Deep Link, consulte `GET /api/v1/telegram/privacy-policy`. O texto
+oficial, seu hash e a URL imutável da versão são retornados sem autenticação. Depois
+do aceite, envie `{"consent": true, "consent_version": "2026-08-10"}` para
+`POST /api/v1/telegram/link`. O servidor rejeita versões diferentes da política
+vigente e só registra versões que tenham conteúdo publicado.
+
+O script administrativo também exige aceite explícito e não possui versão padrão:
+
+```powershell
+.\venv\Scripts\python.exe scripts\gerar_link_telegram.py `
+  --email voce@exemplo.com `
+  --consent-version 2026-08-10 `
+  --confirm-privacy-consent
+```
 
 ## Planilhas
 

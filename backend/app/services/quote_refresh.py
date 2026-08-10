@@ -101,9 +101,12 @@ def refresh_user_quotes(db: Session, user_id: uuid.UUID) -> QuoteRefreshResult:
     failed: list[str] = []
     updated = 0
     for asset in assets:
-        quote = fetched.get(asset.ticker)
+        quote = fetched.get(asset.ticker.strip().upper())
         if quote is None:
             failed.append(asset.ticker)
+            continue
+        latest = _latest_quote(db, asset.id)
+        if latest is not None and latest.collected_at >= quote.collected_at:
             continue
         db.add(
             MarketQuote(
@@ -117,8 +120,8 @@ def refresh_user_quotes(db: Session, user_id: uuid.UUID) -> QuoteRefreshResult:
         timestamps.append(quote.collected_at)
         updated += 1
     collected_at = max(timestamps) if timestamps else datetime.now(UTC)
-    db.flush()
     if updated:
+        db.flush()
         _create_snapshot(db, user_id, assets, datetime.now(UTC))
     db.commit()
     return QuoteRefreshResult(updated, failed, collected_at)

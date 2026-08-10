@@ -21,6 +21,13 @@ class RegisterRequest(BaseModel):
             raise ValueError("e-mail inválido")
         return value
 
+    @field_validator("password")
+    @classmethod
+    def validate_password_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("senha deve ter no máximo 72 bytes em UTF-8")
+        return value
+
 
 class LoginRequest(BaseModel):
     email: str

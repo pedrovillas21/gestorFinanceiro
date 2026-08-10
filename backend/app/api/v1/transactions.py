@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_, select
 
@@ -24,13 +24,13 @@ from app.services.spreadsheets import (
     export_csv,
     export_xlsx,
     import_transactions,
-    process_import_job,
 )
 
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 TZ = ZoneInfo("America/Sao_Paulo")
 ASYNC_IMPORT_THRESHOLD = 5 * 1024 * 1024
+MAX_IMPORT_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def _as_utc(value: datetime | None) -> datetime:
@@ -138,7 +138,6 @@ def create_transaction(
 
 @router.post("/import", response_model=ImportJobResponse, status_code=status.HTTP_202_ACCEPTED)
 def import_file(
-    background_tasks: BackgroundTasks,
     current_user: CurrentUser,
     db: DatabaseSession,
     file: UploadFile = File(...),
@@ -146,23 +145,34 @@ def import_file(
     filename = (file.filename or "import.csv")[:255]
     if not filename.lower().endswith((".csv", ".xlsx")):
         raise HTTPException(status_code=415, detail="Envie um arquivo CSV ou XLSX")
-    content = file.file.read()
+    content = file.file.read(MAX_IMPORT_UPLOAD_BYTES + 1)
+    if len(content) > MAX_IMPORT_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="Arquivo excede o limite de 10 MiB",
+        )
     if not content:
         raise HTTPException(status_code=422, detail="Arquivo vazio")
 
-    job = ImportJob(user_id=current_user.id, filename=filename)
+    is_async = len(content) > ASYNC_IMPORT_THRESHOLD
+    job = ImportJob(
+        user_id=current_user.id,
+        filename=filename,
+        status="pending" if is_async else "processing",
+        content=content if is_async else None,
+        processing_started_at=None if is_async else datetime.now(UTC),
+    )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    if len(content) > ASYNC_IMPORT_THRESHOLD:
-        background_tasks.add_task(
-            process_import_job, job.id, current_user.id, content, filename
-        )
+    if is_async:
         return job
 
     try:
-        total, imported = import_transactions(db, current_user.id, content, filename)
+        total, imported = import_transactions(
+            db, current_user.id, content, filename, commit=False
+        )
     except Exception as exc:
         db.rollback()
         is_validation_error = isinstance(exc, ValueError)
@@ -181,6 +191,7 @@ def import_file(
     job.total_rows = total
     job.imported_rows = imported
     job.completed_at = datetime.now(UTC)
+    job.content = None
     db.commit()
     db.refresh(job)
     return job

@@ -50,12 +50,19 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-def _owned_asset(db: DatabaseSession, user_id: uuid.UUID, asset_id: uuid.UUID) -> InvestmentAsset:
-    asset = db.scalar(
-        select(InvestmentAsset).where(
-            InvestmentAsset.id == asset_id, InvestmentAsset.user_id == user_id
-        )
+def _owned_asset(
+    db: DatabaseSession,
+    user_id: uuid.UUID,
+    asset_id: uuid.UUID,
+    *,
+    for_update: bool = False,
+) -> InvestmentAsset:
+    statement = select(InvestmentAsset).where(
+        InvestmentAsset.id == asset_id, InvestmentAsset.user_id == user_id
     )
+    if for_update:
+        statement = statement.with_for_update()
+    asset = db.scalar(statement)
     if asset is None:
         raise HTTPException(status_code=404, detail="Ativo não encontrado")
     return asset
@@ -157,7 +164,8 @@ def create_movement(
     current_user: CurrentUser,
     db: DatabaseSession,
 ) -> InvestmentMovement:
-    asset = _owned_asset(db, current_user.id, asset_id)
+    # Serializa alterações de custódia do mesmo ativo até o commit.
+    asset = _owned_asset(db, current_user.id, asset_id, for_update=True)
     if asset.currency != "BRL" and (payload.fx_rate is None or payload.fx_rate_date is None):
         raise HTTPException(status_code=422, detail="Ativo estrangeiro exige câmbio e data")
     values = payload.model_dump()
@@ -203,6 +211,7 @@ def delete_movement(
     )
     if movement is None:
         raise HTTPException(status_code=404, detail="Movimentação não encontrada")
+    _owned_asset(db, current_user.id, movement.asset_id, for_update=True)
     remaining = list(
         db.scalars(
             select(InvestmentMovement).where(

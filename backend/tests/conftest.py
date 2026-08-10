@@ -40,7 +40,7 @@ AMBIENTE_DE_TESTE = {
     "TELEGRAM_BOT_USERNAME": "bot_de_teste",
     "TELEGRAM_WEBHOOK_URL": "https://exemplo.invalid/webhook",
     "TELEGRAM_LINK_TOKEN_TTL_MINUTES": "30",
-    "PRIVACY_POLICY_VERSION": "test-v1",
+    "PRIVACY_POLICY_VERSION": "2026-08-10",
     "WEB_APP_URL": "https://exemplo.invalid",
     "CORS_ORIGINS": "https://exemplo.invalid",
     "BRAPI_TOKEN": SENTINELA,

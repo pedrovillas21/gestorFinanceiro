@@ -3,7 +3,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.api.dependencies import CurrentUser, DatabaseSession
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import (
+    DUMMY_PASSWORD_HASH,
+    create_access_token,
+    hash_password,
+    verify_password,
+)
 from app.models.user import User
 from app.schemas.auth import (
     LoginRequest,
@@ -24,9 +29,6 @@ def _token_for(user: User) -> TokenResponse:
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, db: DatabaseSession) -> TokenResponse:
-    if db.scalar(select(User.id).where(User.email == payload.email)) is not None:
-        raise HTTPException(status_code=409, detail="E-mail já cadastrado")
-
     user = User(
         email=payload.email,
         full_name=payload.full_name,
@@ -45,7 +47,9 @@ def register(payload: RegisterRequest, db: DatabaseSession) -> TokenResponse:
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: DatabaseSession) -> TokenResponse:
     user = db.scalar(select(User).where(User.email == payload.email))
-    if user is None or not verify_password(payload.password, user.hashed_password):
+    password_hash = user.hashed_password if user is not None else DUMMY_PASSWORD_HASH
+    password_matches = verify_password(payload.password, password_hash)
+    if user is None or not password_matches:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="E-mail ou senha inválidos",

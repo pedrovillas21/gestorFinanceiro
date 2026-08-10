@@ -11,6 +11,8 @@ Data: 07/08/2026
 - Importação e exportação em CSV/XLSX. Arquivos acima de 5 MB viram jobs em background consultáveis pela API.
 - Representação monetária com `Decimal`, conversão segura e `ROUND_HALF_UP`; valores saem como string no JSON.
 - Consentimento versionado antes da geração do Deep Link do Telegram.
+- Política oficial do Telegram publicada em endpoint versionado, com hash do conteúdo;
+  o aceite informa a versão lida e versões antigas ou inexistentes são rejeitadas.
 - Idempotência dos updates do Telegram e execução do fluxo do bot em thread pool, evitando bloquear o event loop da API com SQLAlchemy síncrono.
 - Migration para data efetiva, consentimento, jobs de importação, idempotência e índices de consulta.
 - CORS configurável e caminho absoluto para o `alembic.ini`.
@@ -22,7 +24,8 @@ Este marco transforma o bot já funcional em um back-end utilizável pelo futuro
 ## Validação executada
 
 - Compilação dos módulos Python.
-- 35 testes aprovados, incluindo contrato monetário, JWT/senha, CSV/XLSX e registro das rotas.
+- 68 testes aprovados, incluindo contrato monetário, JWT/senha, CSV/XLSX,
+  consentimento do Telegram e registro das rotas.
 - A suíte não acessa credenciais ou serviços reais.
 
 ## Pendências e melhorias futuras
@@ -30,4 +33,3 @@ Este marco transforma o bot já funcional em um back-end utilizável pelo futuro
 - Aplicar e validar a migration no PostgreSQL/Supabase de desenvolvimento antes do deploy. Ela não foi executada automaticamente durante os testes para não tocar dados externos.
 - Adicionar testes de integração HTTP com um banco PostgreSQL efêmero; os testes atuais cobrem contratos e regras puras.
 - Para operação em múltiplas instâncias, mover jobs de importação em memória para uma fila persistente (por exemplo, Celery/RQ/Arq). O registro do job já é persistente, mas os bytes do upload vivem no processo até o background terminar.
-- Definir e publicar o texto oficial de privacidade; a API já persiste sua versão e timestamp.

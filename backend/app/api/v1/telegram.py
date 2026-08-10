@@ -8,8 +8,10 @@ from sqlalchemy import select
 
 from app.api.dependencies import CurrentUser, DatabaseSession
 from app.core.config import settings
+from app.core.privacy import PrivacyPolicy, get_privacy_policy
 from app.models.telegram_token import TelegramToken
 from app.schemas.telegram import (
+    PrivacyPolicyResponse,
     TelegramLinkRequest,
     TelegramLinkResponse,
     TelegramLinkStatus,
@@ -22,9 +24,58 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
 
+def _published_policy(version: str) -> PrivacyPolicy:
+    try:
+        return get_privacy_policy(version)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="A política de privacidade configurada ainda não foi publicada",
+        ) from exc
+
+
+def _policy_response(request: Request, policy: PrivacyPolicy) -> PrivacyPolicyResponse:
+    return PrivacyPolicyResponse(
+        version=policy.version,
+        title=policy.title,
+        published_at=policy.published_at,
+        content=policy.content,
+        content_sha256=policy.content_sha256,
+        privacy_policy_url=str(
+            request.url_for("telegram_privacy_policy_version", version=policy.version)
+        ),
+    )
+
+
+@router.get("/privacy-policy", response_model=PrivacyPolicyResponse)
+def current_telegram_privacy_policy(request: Request) -> PrivacyPolicyResponse:
+    """Publica o aviso vigente antes de qualquer coleta de consentimento."""
+    return _policy_response(request, _published_policy(settings.PRIVACY_POLICY_VERSION))
+
+
+@router.get(
+    "/privacy-policy/{version}",
+    response_model=PrivacyPolicyResponse,
+    name="telegram_privacy_policy_version",
+)
+def telegram_privacy_policy_version(
+    version: str, request: Request
+) -> PrivacyPolicyResponse:
+    """Mantém cada aviso publicado acessível por uma URL estável e versionada."""
+    try:
+        policy = get_privacy_policy(version)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Versão da política de privacidade não encontrada",
+        ) from exc
+    return _policy_response(request, policy)
+
+
 @router.post("/link", response_model=TelegramLinkResponse)
 def create_telegram_link(
     payload: TelegramLinkRequest,
+    request: Request,
     current_user: CurrentUser,
     db: DatabaseSession,
 ) -> TelegramLinkResponse:
@@ -34,8 +85,17 @@ def create_telegram_link(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="O consentimento é obrigatório para usar o canal Telegram",
         )
+    policy = _published_policy(settings.PRIVACY_POLICY_VERSION)
+    if payload.consent_version != policy.version:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "A versão aceita não é a política vigente; leia a política atual "
+                "antes de confirmar"
+            ),
+        )
     token = criar_link_token(
-        db, current_user.id, consent_version=settings.PRIVACY_POLICY_VERSION
+        db, current_user.id, consent_version=payload.consent_version
     )
     link = db.scalar(
         select(TelegramToken).where(TelegramToken.user_id == current_user.id)
@@ -44,6 +104,9 @@ def create_telegram_link(
         deep_link=montar_deep_link(token),
         expires_at=link.link_token_expires_at,
         consent_version=link.privacy_consent_version,
+        privacy_policy_url=str(
+            request.url_for("telegram_privacy_policy_version", version=policy.version)
+        ),
     )
 
 
