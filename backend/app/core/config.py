@@ -1,4 +1,5 @@
 """Configurações da aplicação carregadas do .env via pydantic-settings."""
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,18 +30,29 @@ class Settings(BaseSettings):
     TELEGRAM_WEBHOOK_URL: str | None = None
     # Validade (em minutos) do token de vínculo gerado para o Deep Link
     TELEGRAM_LINK_TOKEN_TTL_MINUTES: int = 30
+    PRIVACY_POLICY_VERSION: str = "2026-08-10"
 
     # Front-end (link enviado ao usuário ainda não vinculado)
     WEB_APP_URL: str = "http://localhost:3000"
+    CORS_ORIGINS: str = "http://localhost:3000"
 
     # Mercado financeiro
-    BRAAPI_TOKEN: str | None = None
+    BRAPI_TOKEN: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BRAPI_TOKEN", "BRAAPI_TOKEN"),
+    )
+    MARKET_HTTP_TIMEOUT_SECONDS: float = 10.0
+    QUOTE_STALE_AFTER_MINUTES: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
 
 settings = Settings()

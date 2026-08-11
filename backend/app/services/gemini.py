@@ -61,6 +61,9 @@ Regras para LANÇAMENTO (ex.: "gastei 40 no mercado", "recebi 3500 de salário")
 - "categoria": escolha exatamente uma entre {", ".join(CATEGORIAS)}.
 - "metodo_pagamento": um entre {", ".join(METODOS_PAGAMENTO)}; use null se não for citado.
 - Nunca invente valores nem categorias fora da lista.
+- Se a mensagem claramente for um lançamento, mas o valor ou o tipo estiver incerto,
+  mantenha "eh_transacao": true, preencha somente o que for seguro e use null no campo
+  incerto. O backend pedirá confirmação com botões.
 
 Regras para CONSULTA DE SALDO (ex.: "quanto gastei hoje?", "qual meu saldo essa semana",
 "quanto recebi esse mês", "como estou nos últimos 3 meses"):
@@ -71,8 +74,8 @@ Regras para CONSULTA DE SALDO (ex.: "quanto gastei hoje?", "qual meu saldo essa 
   Se a mensagem não deixar claro o período, use "mes". Não invente outros períodos:
   para "esse ano" ou qualquer intervalo fora da lista, use "3meses".
 
-Se a mensagem não for nem um lançamento nem uma pergunta de saldo, ou se um lançamento
-não tiver o valor claro, devolva "eh_transacao": false, "eh_consulta_saldo": false e
+Se a mensagem não for nem um lançamento nem uma pergunta de saldo, devolva
+"eh_transacao": false, "eh_consulta_saldo": false e
 escreva em "observacao" uma frase curta, em português, explicando ao usuário o que ele
 deve enviar."""
 
@@ -188,7 +191,7 @@ async def extrair_transacao(
             # O modelo respondeu — tentar o próximo pode dar um JSON válido.
             houve_resposta_fora_do_contrato = True
             ultimo_erro = exc
-            logger.warning("Modelo %s respondeu fora do contrato: %s", modelo, exc)
+            logger.warning("Modelo %s respondeu fora do contrato", modelo)
         except Exception as exc:  # noqa: BLE001 — a cascata existe justamente para absorver
             ultimo_erro = exc
             logger.warning("Modelo %s falhou na cascata do Gemini: %s", modelo, exc)
@@ -196,7 +199,7 @@ async def extrair_transacao(
     if houve_resposta_fora_do_contrato:
         # A IA está de pé, só não produziu um JSON utilizável: dizer "indisponível"
         # seria mentira, e executar um período chutado seria pior ainda.
-        logger.error("Nenhum modelo devolveu JSON dentro do contrato: %s", ultimo_erro)
+        logger.error("Nenhum modelo devolveu JSON dentro do contrato")
         return TransacaoExtraida(eh_transacao=False, observacao=OBSERVACAO_FORA_DO_CONTRATO)
 
     raise GeminiIndisponivelError(

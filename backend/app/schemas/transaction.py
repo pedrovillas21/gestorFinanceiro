@@ -1,0 +1,71 @@
+import uuid
+from datetime import datetime
+from decimal import Decimal
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+TransactionType = Literal["income", "expense"]
+
+
+class TransactionBase(BaseModel):
+    description: str = Field(min_length=1, max_length=255)
+    amount: Decimal = Field(gt=0, max_digits=18)
+    category: str | None = Field(default=None, max_length=100)
+    type: TransactionType
+    payment_method: str | None = Field(default=None, max_length=50)
+    occurred_at: datetime | None = None
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def decimal_from_input(cls, value: object) -> Decimal:
+        return Decimal(str(value))
+
+
+class TransactionCreate(TransactionBase):
+    pass
+
+
+class TransactionUpdate(BaseModel):
+    description: str | None = Field(default=None, min_length=1, max_length=255)
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=18)
+    category: str | None = Field(default=None, max_length=100)
+    type: TransactionType | None = None
+    payment_method: str | None = Field(default=None, max_length=50)
+    occurred_at: datetime | None = None
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def decimal_from_input(cls, value: object) -> Decimal | None:
+        return None if value is None else Decimal(str(value))
+
+
+class TransactionResponse(TransactionBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    source: str
+    occurred_at: datetime
+    created_at: datetime
+
+
+class TransactionListResponse(BaseModel):
+    items: list[TransactionResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class CategorySummary(BaseModel):
+    category: str
+    amount: Decimal
+
+
+class FinancialSummary(BaseModel):
+    income: Decimal
+    expense: Decimal
+    balance: Decimal
+    by_category: list[CategorySummary]
+    start: datetime | None
+    end: datetime | None

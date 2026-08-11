@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "resume/como-rodar-o-bot.md",
+                "file": "backend/README.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "como-rodar-o-bot"
+              "title": "README"
             }
           }
         ]
@@ -187,20 +187,27 @@
   },
   "active": "1ab8a2ba20e0a7a5",
   "lastOpenFiles": [
-    "backend/tests/__pycache__/conftest.cpython-312.pyc",
-    "backend/tests/conftest.py.tmp.7824.5185ce1be315",
-    "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md.tmp.7824.82e1f8bca94c",
-    "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md.tmp.7824.7dade0bd0c98",
-    "backend/app/services/telegram_bot.py.tmp.7824.9d1f205e860e",
-    "README.md.tmp.7824.dc5bb172533e",
-    "README.md.tmp.7824.356044c250f8",
-    "backend/requirements.txt.tmp.7824.5b1ce7ac6ebf",
-    "backend/tests/__pycache__/test_periodos.cpython-312-pytest-9.1.1.pyc",
-    "backend/tests/__pycache__/test_gemini_contrato.cpython-312-pytest-9.1.1.pyc",
-    "backend/venv/Lib/site-packages/_pytest/__pycache__/terminalprogress.cpython-312-pytest-9.1.1.pyc",
-    "README.md",
-    "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md",
+    "graphify-out/cache/ast/v0.9.38/d49a2bcfb460d3ce1c8636b176897cd96291c5764fcb30cf337a74ec1fe136de.json",
+    "graphify-out/cache/ast/v0.9.38/a2ba41d827d029ed017171afcf8f66637767b6297a1c30c369bbc96201bfd76a.json",
+    "graphify-out/cache/ast/v0.9.38/59e078414aa457d4709dfd9ef8e23e151c85d44312aa6db281e10c0fcb2b947e.json",
+    "graphify-out/cache/ast/v0.9.38/ee757e96bc6ba2a7cf14e0c18c77df4f7e999dec27124cd8f7d04661764c8a09.json",
+    "graphify-out/cache/ast/v0.9.38/bf4f31acabedb80eb764511f8f0dffac9cbc7d747221fee276906fcaeee00849.json",
+    "graphify-out/cache/ast/v0.9.38/c239ae2eb11e128579a1cf8673aaff92921bcb8c7b61978236057fb31aba51f0.json",
+    "graphify-out/cache/ast/v0.9.38/b31470591ffd3ab2f8cf51e51510d51885ce6b6f700bd21d96d22d49d4b137c0.json",
+    "graphify-out/cache/ast/v0.9.38/59cefb04c7907b6c70c7c065a9e0822ea6eaeddd1c0faec85bc2ae1d0a625d0e.json",
+    "graphify-out/cache/ast/v0.9.38/c451a00d9057a63e9cc6c4c635d385248c519c195f865e5b2aef35b3dade4594.json",
+    "graphify-out/cache/ast/v0.9.38/8ed539fc23b6d22b75ded908d36e83b02107fc5d0a2974294577e2a202de706c.json",
+    "graphify-out/cache/ast/v0.9.38/7c16bac0f08b0887a7a373fe944af43ec52bdfce1324760d80d024cc2ec1954f.json",
+    "backend/graphify-out/GRAPH_REPORT.md",
     "resume/como-rodar-o-bot.md",
+    "plan/Plano de Preparacao do Ambiente - Supabase e Alembic Migrations Automatica.md",
+    "README.md",
+    "resume/03-backend-bot-operacao-validacao-final.md",
+    "backend/README.md",
+    "resume/02-backend-investimentos-cotacoes-calculadora.md",
+    "resume/01-backend-fundacao-autenticacao-financas.md",
+    "graphify-out/GRAPH_REPORT.md",
+    "plan/Plano de Arquitetura e Especificação Técnica - Gestor Financeiro com IA.md",
     "resume/bot-telegram-status.md"
   ]
 }

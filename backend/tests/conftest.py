@@ -29,7 +29,7 @@ AMBIENTE_DE_TESTE = {
     "DATABASE_URL": f"postgresql://usuario:{SENTINELA}@localhost:1/banco_de_teste",
     "SUPABASE_URL": "https://exemplo.invalid",
     "SUPABASE_KEY": SENTINELA,
-    "SECRET_KEY": SENTINELA,
+    "SECRET_KEY": f"{SENTINELA}-jwt-chave-com-tamanho-seguro",
     "ALGORITHM": "HS256",
     "ACCESS_TOKEN_EXPIRE_MINUTES": "10080",
     "GEMINI_API_KEY": SENTINELA,
@@ -40,8 +40,12 @@ AMBIENTE_DE_TESTE = {
     "TELEGRAM_BOT_USERNAME": "bot_de_teste",
     "TELEGRAM_WEBHOOK_URL": "https://exemplo.invalid/webhook",
     "TELEGRAM_LINK_TOKEN_TTL_MINUTES": "30",
+    "PRIVACY_POLICY_VERSION": "2026-08-10",
     "WEB_APP_URL": "https://exemplo.invalid",
-    "BRAAPI_TOKEN": SENTINELA,
+    "CORS_ORIGINS": "https://exemplo.invalid",
+    "BRAPI_TOKEN": SENTINELA,
+    "MARKET_HTTP_TIMEOUT_SECONDS": "10",
+    "QUOTE_STALE_AFTER_MINUTES": "60",
 }
 
 for nome, valor in AMBIENTE_DE_TESTE.items():
