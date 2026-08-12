@@ -14,7 +14,12 @@ class Settings(BaseSettings):
     # Autenticação JWT
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
+    # Curto de propósito: o access token é stateless e não consulta a tabela de
+    # sessões, então revogar (logout, troca de senha) só tem efeito real quando
+    # ele expira. 30 minutos é a janela em que um token já revogado ainda passa.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Refresh token opaco, persistido e rotacionado a cada uso: 30 dias.
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 43200
 
     # IA — Cascata do Gemini (modelo recente -> fallback estável)
     GEMINI_API_KEY: str

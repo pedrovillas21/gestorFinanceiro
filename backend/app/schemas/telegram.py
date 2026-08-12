@@ -80,6 +80,15 @@ class PrivacyPolicyResponse(BaseModel):
     privacy_policy_url: str
 
 
+class TelegramUnlinkResponse(BaseModel):
+    """Confirma a revogação e devolve o consentimento que ficou registrado."""
+
+    message: str
+    unlinked_at: datetime
+    consent_version: str | None
+    consented_at: datetime | None
+
+
 class TelegramLinkStatus(BaseModel):
     linked: bool
     linked_at: datetime | None

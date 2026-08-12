@@ -1,20 +1,23 @@
 """Endpoint de webhook do Telegram (seção 3.1 do guia)."""
+from datetime import UTC, datetime
 import logging
 import secrets
 
 from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request, status
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.api.dependencies import CurrentUser, DatabaseSession
 from app.core.config import settings
 from app.core.privacy import PrivacyPolicy, get_privacy_policy
+from app.models.pending_transaction import PendingTransaction
 from app.models.telegram_token import TelegramToken
 from app.schemas.telegram import (
     PrivacyPolicyResponse,
     TelegramLinkRequest,
     TelegramLinkResponse,
     TelegramLinkStatus,
+    TelegramUnlinkResponse,
     TelegramUpdate,
 )
 from app.services.telegram_bot import criar_link_token, montar_deep_link, processar_update
@@ -122,6 +125,45 @@ def telegram_link_status(
         linked_at=link.linked_at if link else None,
         consent_version=link.privacy_consent_version if link else None,
         consented_at=link.privacy_consented_at if link else None,
+    )
+
+
+@router.delete("/link", response_model=TelegramUnlinkResponse)
+def delete_telegram_link(
+    current_user: CurrentUser, db: DatabaseSession
+) -> TelegramUnlinkResponse:
+    """Revoga o vínculo com o Telegram preservando a trilha de consentimento.
+
+    A linha não é apagada: `privacy_consent_version` e `privacy_consented_at`
+    continuam registrando que houve aceite e quando, e `unlinked_at` registra a
+    revogação. Apagar a linha faria o histórico sumir junto — e `criar_link_token`
+    recriaria uma nova em branco na próxima conexão.
+
+    O que precisa sumir de fato é o `chat_id`: enquanto ele existir, o bot segue
+    aceitando mensagens daquele chat como se fossem do usuário.
+    """
+    link = db.scalar(
+        select(TelegramToken).where(TelegramToken.user_id == current_user.id)
+    )
+    if link is None or link.chat_id is None:
+        raise HTTPException(status_code=404, detail="Nenhum vínculo do Telegram para remover")
+
+    # Confirmação pendente daquele chat morre junto: ela guarda dados da
+    # transação e ficaria órfã, esperando um "sim" que não pode mais chegar.
+    db.execute(delete(PendingTransaction).where(PendingTransaction.chat_id == link.chat_id))
+
+    unlinked_at = datetime.now(UTC)
+    link.chat_id = None
+    link.link_token = None
+    link.link_token_expires_at = None
+    link.linked_at = None
+    link.unlinked_at = unlinked_at
+    db.commit()
+    return TelegramUnlinkResponse(
+        message="Vínculo com o Telegram removido",
+        unlinked_at=unlinked_at,
+        consent_version=link.privacy_consent_version,
+        consented_at=link.privacy_consented_at,
     )
 
 

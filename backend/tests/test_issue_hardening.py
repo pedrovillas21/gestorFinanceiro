@@ -61,7 +61,7 @@ def test_registration_relies_on_database_unique_constraint(monkeypatch) -> None:
 
     db = RecordingDb()
     monkeypatch.setattr(auth, "hash_password", lambda password: "hashed")
-    monkeypatch.setattr(auth, "_token_for", lambda user: "token")
+    monkeypatch.setattr(auth, "_start_session", lambda db, user, user_agent=None: "token")
 
     result = auth.register(
         RegisterRequest(email="new@example.com", password="safe-password"), db

@@ -323,3 +323,133 @@ def export_xlsx(transactions: list[Transaction]) -> bytes:
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()
+
+
+# --------------------------------------------------------------------------------------
+# Exportação da carteira de investimentos
+# --------------------------------------------------------------------------------------
+
+POSITION_HEADERS = [
+    "ticker",
+    "nome",
+    "tipo",
+    "moeda",
+    "quantidade",
+    "preco_medio",
+    "custo_investido",
+    "cotacao",
+    "cotacao_coletada_em",
+    "valor_mercado",
+    "ganho_nao_realizado",
+    "ganho_realizado",
+    "proventos_bruto",
+    "proventos_liquido",
+    "retorno_sobre_custo",
+]
+MOVEMENT_HEADERS = [
+    "data",
+    "ticker",
+    "tipo_movimento",
+    "quantidade",
+    "preco_unitario",
+    "custos",
+    "valor_bruto",
+    "valor_liquido",
+    "fator",
+    "operacao",
+    "cambio",
+    "cambio_data",
+    "observacoes",
+]
+
+
+def _optional(value: object) -> str:
+    """Nulo vira célula vazia, nunca "None" nem 0 — a distinção importa aqui.
+
+    Uma posição sem cotação tem `market_value` nulo; escrever 0 diria que a
+    posição vale zero, que é outra coisa.
+    """
+    return "" if value is None else str(value)
+
+
+def _position_row(position) -> list[str]:
+    quote = position.quote
+    return [
+        _escape_spreadsheet_formula(position.asset.ticker),
+        _escape_spreadsheet_formula(position.asset.name),
+        _escape_spreadsheet_formula(position.asset.asset_type),
+        _escape_spreadsheet_formula(position.asset.currency),
+        _optional(position.quantity),
+        _optional(position.average_price),
+        _optional(position.invested_cost),
+        _optional(quote.price if quote else None),
+        _optional(quote.collected_at.isoformat() if quote else None),
+        _optional(position.market_value),
+        _optional(position.unrealized_gain),
+        _optional(position.realized_gain),
+        _optional(position.dividends_gross),
+        _optional(position.dividends_net),
+        _optional(position.return_on_cost),
+    ]
+
+
+def _movement_row(movement, ticker: str) -> list[str]:
+    return [
+        movement.occurred_at.isoformat(),
+        _escape_spreadsheet_formula(ticker),
+        _escape_spreadsheet_formula(movement.movement_type),
+        _optional(movement.quantity),
+        _optional(movement.unit_price),
+        _optional(movement.costs),
+        _optional(movement.gross_amount),
+        _optional(movement.net_amount),
+        _optional(movement.factor),
+        _escape_spreadsheet_formula(movement.trade_kind),
+        _optional(movement.fx_rate),
+        _optional(movement.fx_rate_date.isoformat() if movement.fx_rate_date else None),
+        _escape_spreadsheet_formula(movement.notes),
+    ]
+
+
+def _rows_to_csv(headers: list[str], rows: list[list[str]]) -> bytes:
+    output = StringIO(newline="")
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(headers)
+    writer.writerows(rows)
+    return output.getvalue().encode("utf-8-sig")
+
+
+def export_positions_csv(positions: list) -> bytes:
+    return _rows_to_csv(POSITION_HEADERS, [_position_row(item) for item in positions])
+
+
+def export_movements_csv(movements: list[tuple[object, str]]) -> bytes:
+    """`movements` são pares (movimentação, ticker) — o ticker não está na linha."""
+    return _rows_to_csv(
+        MOVEMENT_HEADERS, [_movement_row(item, ticker) for item, ticker in movements]
+    )
+
+
+def export_portfolio_xlsx(
+    positions: list, movements: list[tuple[object, str]]
+) -> bytes:
+    """Carteira em duas abas: consolidado e extrato.
+
+    Cada uma responde a uma pergunta diferente — "quanto tenho hoje" e "como
+    cheguei aqui" —, e o XLSX é o único formato dos dois que comporta as duas
+    sem obrigar o usuário a baixar dois arquivos.
+    """
+    workbook = Workbook(write_only=True)
+    positions_sheet = workbook.create_sheet("Posições")
+    positions_sheet.append(POSITION_HEADERS)
+    for position in positions:
+        positions_sheet.append(_position_row(position))
+
+    movements_sheet = workbook.create_sheet("Movimentações")
+    movements_sheet.append(MOVEMENT_HEADERS)
+    for movement, ticker in movements:
+        movements_sheet.append(_movement_row(movement, ticker))
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()

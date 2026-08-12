@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -67,5 +67,31 @@ class FinancialSummary(BaseModel):
     expense: Decimal
     balance: Decimal
     by_category: list[CategorySummary]
+    # Qual tipo o `by_category` agrega. Continua `expense` por padrão, para o
+    # contrato anterior seguir valendo sem o parâmetro.
+    by_category_type: TransactionType = "expense"
+    start: datetime | None
+    end: datetime | None
+
+
+class CategoryOption(BaseModel):
+    """Categoria já usada pelo usuário, com a frequência para ordenar o filtro."""
+
+    category: str
+    count: int
+
+
+class TimeseriesPoint(BaseModel):
+    # Data local (America/Sao_Paulo) em que o período começa: o próprio dia, a
+    # segunda-feira da semana ou o dia 1 do mês.
+    period: date
+    income: Decimal
+    expense: Decimal
+    balance: Decimal
+
+
+class TimeseriesResponse(BaseModel):
+    granularity: Literal["day", "week", "month"]
+    points: list[TimeseriesPoint]
     start: datetime | None
     end: datetime | None

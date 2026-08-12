@@ -11,9 +11,11 @@ from app.models.investment import (
     PortfolioSnapshot,
 )
 from app.models.pending_transaction import PendingTransaction
+from app.models.refresh_token import RefreshToken
 
 __all__ = [
     "User",
+    "RefreshToken",
     "Transaction",
     "TelegramToken",
     "ImportJob",

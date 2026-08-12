@@ -63,11 +63,11 @@ Nove endpoints. Nenhum exige alteração de schema do banco.
 
 Hoje o JWT dura 7 dias (`ACCESS_TOKEN_EXPIRE_MINUTES=10080`) e não há renovação nem revogação. Três caminhos:
 
-| Opção | O que envolve | Trade-off |
-| --- | --- | --- |
-| (a) `POST /auth/refresh` simples | Troca um access token ainda válido por outro. Sem tabela, sem migration. | Não ajuda quem já expirou e estende a sessão indefinidamente enquanto o usuário estiver ativo. Não resolve A8. |
-| (b) Refresh token opaco em tabela | Token de longa duração persistido, com rotação a cada uso e revogação. Exige migration e habilita logout de verdade. | O caminho correto para produção; resolve também a pendência do A8. Maior esforço. |
-| (c) Não fazer | O front detecta `expires_at` e avisa antes de cair. | Zero custo no back-end; experiência pior, mas aceitável em MVP. |
+| Opção                             | O que envolve                                                                                                        | Trade-off                                                                                                      |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| (a) `POST /auth/refresh` simples  | Troca um access token ainda válido por outro. Sem tabela, sem migration.                                             | Não ajuda quem já expirou e estende a sessão indefinidamente enquanto o usuário estiver ativo. Não resolve A8. |
+| (b) Refresh token opaco em tabela | Token de longa duração persistido, com rotação a cada uso e revogação. Exige migration e habilita logout de verdade. | O caminho correto para produção; resolve também a pendência do A8. Maior esforço.                              |
+| (c) Não fazer                     | O front detecta `expires_at` e avisa antes de cair.                                                                  | Zero custo no back-end; experiência pior, mas aceitável em MVP.                                                |
 
 Recomendação: **(b)** se a aplicação vai para produção com usuários reais; **(c)** enquanto for uso próprio. A opção (a) entrega a aparência de sessão renovável sem as garantias de segurança que a justificariam.
 
@@ -112,13 +112,17 @@ Enquanto isso não for decidido, a troca de senha autenticada (A8) cobre o caso 
 
 ## 5. Pendências que aguardam decisão
 
-- [ ] Escopo a implementar (grupo A, A+B, ou apenas o subconjunto de gráficos).
-- [ ] C1: estratégia de sessão — (a), (b) ou (c).
-- [ ] B3: aceitar a mudança de contrato para envelope paginado em ativos/movimentações?
-- [ ] A9: apagar a linha do vínculo do Telegram ou preservar o histórico de consentimento?
-- [ ] B2: a exportação da carteira leva posições, movimentações ou ambas?
-- [ ] C2: haverá provedor de e-mail no projeto?
-- [ ] Introduzir testes de integração com banco, dado que a suíte atual não cobre comportamento de SQL?
+> **Resolvidas em 12/08/2026.** As decisões e a implementação estão em
+> `07-lacunas-backend-implementadas.md`. 13 das 14 lacunas foram implementadas;
+> só C2 ficou aberta.
+
+- [x] Escopo a implementar — grupo A + B + C1, back-end apenas.
+- [x] C1: estratégia de sessão — **(b)**, refresh token opaco em tabela, com access de 30 min e refresh de 30 dias.
+- [x] B3: **não** houve mudança de contrato — `limit`/`offset` com lista pura.
+- [x] A9: preservar o histórico de consentimento, com `unlinked_at` registrando a revogação.
+- [x] B2: ambas — posições e movimentações, em abas separadas no XLSX.
+- [x] C2: sem provedor de e-mail por ora; segue sendo a única lacuna aberta.
+- [x] Testes de integração: adiados. Padrão da casa agora, com o desenho da suíte registrado na seção 5.2 do documento 07.
 
 ---
 
