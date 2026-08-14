@@ -13,18 +13,46 @@ import io
 import json
 import uuid
 
+from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 from openpyxl import load_workbook
 from pydantic import ValidationError
 import pytest
 
+from app.api.dependencies import get_current_user, get_optional_user
+from app.api.v1 import auth
 from app.api.v1.transactions import ORDERABLE_COLUMNS, OrderBy
 from app.core.security import generate_refresh_token, hash_refresh_token
 from app.main import app
 from app.models.refresh_token import RefreshToken
-from app.schemas.auth import ChangePasswordRequest, ProfileUpdate, TokenResponse
+from app.schemas.auth import (
+    ChangePasswordRequest,
+    LoginRequest,
+    LogoutRequest,
+    ProfileUpdate,
+    TokenResponse,
+)
+from app.services.login_throttle import (
+    FAILURES_PER_LOCK,
+    FAILURE_WINDOW,
+    IP_TOLERANCE,
+    LEVEL_DECAY,
+    LOCK_DURATIONS,
+    LoginBlocked,
+    ThrottleState,
+    forget_stale_failures,
+    lock_duration,
+    register_failure,
+    scope_hash,
+    seconds_until_release,
+)
 from app.schemas.investment import MovementCreate, MovementUpdate
 from app.schemas.transaction import CategoryOption, TimeseriesPoint
-from app.services.sessions import RefreshTokenError, rotate_refresh_token
+from app.services.sessions import (
+    RefreshTokenError,
+    revoke_refresh_token,
+    rotate_refresh_token,
+)
 from app.services.spreadsheets import export_portfolio_xlsx, export_positions_csv
 from app.services.timeseries import (
     MAX_POINTS,
@@ -172,12 +200,25 @@ class FakeSession:
         self.rows: list[RefreshToken] = [stored] if stored is not None else []
         self.commits = 0
         self.mass_revocations = 0
+        self.statements: list = []
 
     def scalar(self, statement):  # noqa: ANN001 - assinatura do SQLAlchemy
-        # O serviço só busca por token_hash; comparar o literal do WHERE seria
-        # testar o SQLAlchemy, não o serviço.
-        wanted = statement.whereclause.right.value
-        return next((row for row in self.rows if row.token_hash == wanted), None)
+        # Reproduz o WHERE por igualdade coluna a coluna. Comparar o literal do
+        # SQL seria testar o SQLAlchemy, não o serviço.
+        self.statements.append(statement)
+        whereclause = statement.whereclause
+        filters = {
+            clause.left.name: clause.right.value
+            for clause in getattr(whereclause, "clauses", (whereclause,))
+        }
+        return next(
+            (
+                row
+                for row in self.rows
+                if all(getattr(row, name) == value for name, value in filters.items())
+            ),
+            None,
+        )
 
     def add(self, row: RefreshToken) -> None:
         self.rows.append(row)
@@ -252,6 +293,199 @@ def test_expired_and_unknown_tokens_are_refused_without_mass_revocation() -> Non
     # Token vencido ou desconhecido é rotina, não incidente: não pode derrubar
     # as outras sessões do usuário.
     assert db.mass_revocations == 0
+
+
+def test_rotation_locks_the_row_it_is_about_to_revoke() -> None:
+    """Sem `FOR UPDATE`, duas chamadas com o mesmo token rotacionam as duas.
+
+    As duas leriam `revoked_at is None`, as duas criariam sessão nova, e a
+    segunda sobrescreveria o `revoked_at`/`replaced_by_id` da primeira — dois
+    refresh tokens vivos para uma rotação só, e o alarme de reuso nunca dispara.
+    """
+    db = FakeSession(_stored_token("token-original"))
+    rotate_refresh_token(db, "token-original")
+
+    assert db.statements[0]._for_update_arg is not None
+
+
+def test_single_session_logout_works_without_knowing_the_user() -> None:
+    """Quem está com o access token vencido ainda precisa conseguir deslogar."""
+    stored = _stored_token("token-da-sessao")
+    db = FakeSession(stored)
+
+    assert revoke_refresh_token(db, "token-da-sessao") is True
+    assert stored.revoked_at is not None
+    # Mesmo motivo da rotação: ler e escrever a linha sem lock deixa dois
+    # caminhos concorrentes decidirem sobre o mesmo estado.
+    assert db.statements[0]._for_update_arg is not None
+
+    # Já revogado, não há o que revogar de novo.
+    assert revoke_refresh_token(db, "token-da-sessao") is False
+
+
+def test_authenticated_logout_stays_restricted_to_the_caller_sessions() -> None:
+    stored = _stored_token("token-de-outra-pessoa")
+    db = FakeSession(stored)
+
+    assert revoke_refresh_token(db, "token-de-outra-pessoa", uuid.uuid4()) is False
+    assert stored.revoked_at is None
+    assert revoke_refresh_token(db, "token-de-outra-pessoa", stored.user_id) is True
+
+
+def test_logout_endpoint_accepts_a_caller_without_access_token() -> None:
+    """O caso que motivou a mudança: access token vencido, sessão viva no servidor."""
+    stored = _stored_token("token-da-sessao")
+    db = FakeSession(stored)
+
+    auth.logout(LogoutRequest(refresh_token="token-da-sessao"), db, None)
+
+    assert stored.revoked_at is not None
+    assert db.commits == 1
+
+
+def test_logout_of_every_device_still_requires_a_valid_access_token() -> None:
+    """Derrubar tudo é ação sobre a conta, não sobre o token apresentado."""
+    db = FakeSession()
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth.logout(LogoutRequest(all_devices=True), db, None)
+
+    assert exc_info.value.status_code == 401
+    assert db.mass_revocations == 0
+
+
+def test_expired_access_token_identifies_nobody_instead_of_failing() -> None:
+    """`get_optional_user` não pode dar 401: o cliente manda o header velho.
+
+    Se a credencial vencida virasse erro, `/auth/logout` continuaria inalcançável
+    justamente para quem mais precisa dele.
+    """
+    db = SimpleNamespace(get=lambda model, user_id: "nunca chega aqui")
+    vencida = HTTPAuthorizationCredentials(scheme="Bearer", credentials="jwt.invalido")
+
+    assert get_optional_user(db, vencida) is None
+    assert get_optional_user(db, None) is None
+
+    # Nas rotas que exigem identidade, a ausência continua sendo 401.
+    with pytest.raises(HTTPException) as exc_info:
+        get_current_user(None)
+    assert exc_info.value.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Rate limit do login (seção 7.5 do documento 07)
+# ---------------------------------------------------------------------------
+
+
+def _fail(state: ThrottleState, now: datetime, vezes: int) -> ThrottleState:
+    for _ in range(vezes):
+        state = register_failure(state, now)
+    return state
+
+
+def test_lockout_ladder_grows_with_each_block() -> None:
+    """Cada bloqueio novo custa mais que o anterior: 10 min, 3 h, 24 h."""
+    agora = datetime(2026, 8, 14, 12, tzinfo=UTC)
+
+    quatro = _fail(ThrottleState(), agora, 4)
+    # Quatro erros não bloqueiam ninguém — quem digitou errado não paga nada.
+    assert quatro.lock_level == 0
+    assert seconds_until_release(quatro, agora) == 0
+
+    primeiro = _fail(ThrottleState(), agora, FAILURES_PER_LOCK)
+    assert primeiro.lock_level == 1
+    assert seconds_until_release(primeiro, agora) == 10 * 60
+
+    # Cada retomada acontece assim que o bloqueio anterior termina — é o melhor
+    # caso do atacante paciente, e mesmo ele sobe a escada.
+    segundo = _fail(primeiro, primeiro.locked_until, FAILURES_PER_LOCK)
+    assert segundo.lock_level == 2
+    assert seconds_until_release(segundo, segundo.last_failure_at) == 3 * 60 * 60
+
+    terceiro = _fail(segundo, segundo.locked_until, FAILURES_PER_LOCK)
+    assert terceiro.lock_level == 3
+    assert seconds_until_release(terceiro, terceiro.last_failure_at) == 24 * 60 * 60
+
+    # Do último degrau em diante, repete 24 h — não vira bloqueio permanente.
+    quarto = _fail(terceiro, terceiro.locked_until, FAILURES_PER_LOCK)
+    assert quarto.lock_level == 4
+    assert seconds_until_release(quarto, quarto.last_failure_at) == 24 * 60 * 60
+
+
+def test_idle_time_forgets_the_count_but_not_the_step() -> None:
+    """Esperar a janela não pode ser a receita para tentar em blocos de 4."""
+    agora = datetime(2026, 8, 14, 12, tzinfo=UTC)
+    quatro = _fail(ThrottleState(), agora, 4)
+
+    depois = agora + FAILURE_WINDOW
+    assert forget_stale_failures(quatro, depois).failures == 0
+
+    bloqueado = _fail(ThrottleState(), agora, FAILURES_PER_LOCK)
+    reincidente = forget_stale_failures(bloqueado, agora + FAILURE_WINDOW)
+    assert reincidente.lock_level == 1  # o degrau conquistado permanece
+
+    # Só o silêncio longo zera a escada inteira.
+    assert forget_stale_failures(bloqueado, agora + LEVEL_DECAY) == ThrottleState()
+
+
+def test_waiting_out_the_longest_block_does_not_reset_the_ladder() -> None:
+    """`LEVEL_DECAY` tem de ser maior que o maior bloqueio.
+
+    Iguais, a escada zerava no instante exato em que as 24 h terminavam: bastaria
+    cumprir a punição para voltar a degraus de 10 minutos, e o teto nunca valeria.
+    """
+    assert LEVEL_DECAY > lock_duration(len(LOCK_DURATIONS))
+
+
+def test_ip_scope_tolerates_more_failures_than_the_email_scope() -> None:
+    """Um IP pode ser um escritório inteiro atrás de NAT."""
+    agora = datetime(2026, 8, 14, 12, tzinfo=UTC)
+    state = ThrottleState()
+    for passo in range(FAILURES_PER_LOCK):
+        state = register_failure(
+            state,
+            agora + timedelta(seconds=passo),
+            failures_per_lock=FAILURES_PER_LOCK * IP_TOLERANCE,
+        )
+    assert state.lock_level == 0
+    assert seconds_until_release(state, agora) == 0
+
+
+def test_throttle_never_stores_the_email_or_the_ip() -> None:
+    """Um dump da tabela não pode virar lista de contas cadastradas."""
+    hash_ = scope_hash("email", "pessoa@example.com")
+
+    assert "pessoa@example.com" not in hash_
+    assert len(hash_) == 64  # SHA-256 em hexadecimal cabe no String(64).
+    # Escopos diferentes não colidem mesmo com o mesmo valor.
+    assert scope_hash("ip", "pessoa@example.com") != hash_
+
+
+def test_blocked_login_answers_429_without_touching_the_password() -> None:
+    """Bloqueio existe para não fazer o trabalho — nem bcrypt, nem consulta."""
+
+    class RecusaTudo:
+        def scalar(self, statement):  # noqa: ANN001 - assinatura do SQLAlchemy
+            raise AssertionError("login bloqueado não pode consultar o usuário")
+
+    def nao_chamar(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("login bloqueado não pode verificar senha")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(auth, "verify_password", nao_chamar)
+        patch.setattr(
+            auth,
+            "check_login_allowed",
+            lambda db, email, ip: (_ for _ in ()).throw(LoginBlocked(600)),
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            auth.login(
+                LoginRequest(email="alvo@example.com", password="tentativa"),
+                RecusaTudo(),
+            )
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers["Retry-After"] == "600"
 
 
 def test_change_password_defaults_to_revoking_other_devices() -> None:

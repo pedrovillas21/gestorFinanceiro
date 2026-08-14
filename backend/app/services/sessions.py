@@ -47,7 +47,14 @@ def rotate_refresh_token(
     usuário e exigir login novo.
     """
     stored = db.scalar(
-        select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(token))
+        select(RefreshToken)
+        .where(RefreshToken.token_hash == hash_refresh_token(token))
+        # `FOR UPDATE` serializa duas chamadas que apresentem o mesmo token. Sem o
+        # lock, as duas leem `revoked_at is None`, as duas rotacionam, e a segunda
+        # sobrescreve `revoked_at`/`replaced_by_id` da primeira: sobram dois tokens
+        # vivos para uma rotação só e a detecção de reuso nunca dispara. Com ele, a
+        # segunda espera e enxerga a linha já revogada — que é o sinal esperado.
+        .with_for_update()
     )
     if stored is None:
         raise RefreshTokenError("refresh token inválido")
@@ -75,13 +82,22 @@ def rotate_refresh_token(
     return new_token, new_session
 
 
-def revoke_refresh_token(db: Session, token: str, user_id: uuid.UUID) -> bool:
-    """Revoga uma sessão específica. Devolve se havia algo ativo para revogar."""
+def revoke_refresh_token(
+    db: Session, token: str, user_id: uuid.UUID | None = None
+) -> bool:
+    """Revoga uma sessão específica. Devolve se havia algo ativo para revogar.
+
+    Sem `user_id`, apresentar o token é a própria prova de posse — é assim que o
+    logout funciona para quem já está com o access token vencido. Quando o
+    chamador está autenticado, o `user_id` restringe a revogação às sessões dele.
+    """
+    conditions = [RefreshToken.token_hash == hash_refresh_token(token)]
+    if user_id is not None:
+        conditions.append(RefreshToken.user_id == user_id)
     stored = db.scalar(
-        select(RefreshToken).where(
-            RefreshToken.token_hash == hash_refresh_token(token),
-            RefreshToken.user_id == user_id,
-        )
+        # Mesmo motivo da rotação: ler e escrever a linha sem lock deixa dois
+        # caminhos concorrentes decidirem sobre o mesmo estado.
+        select(RefreshToken).where(*conditions).with_for_update()
     )
     if stored is None or stored.revoked_at is not None:
         return False

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.dependencies import CurrentUser, DatabaseSession
+from app.api.dependencies import ClientIp, CurrentUser, DatabaseSession, OptionalUser
 from app.core.security import (
     DUMMY_PASSWORD_HASH,
     create_access_token,
@@ -23,6 +23,12 @@ from app.schemas.auth import (
     RegisterRequest,
     TokenResponse,
     UserResponse,
+)
+from app.services.login_throttle import (
+    LoginBlocked,
+    check_login_allowed,
+    clear_login_failures,
+    register_failed_login,
 )
 from app.services.sessions import (
     RefreshTokenError,
@@ -82,17 +88,37 @@ def register(
 
 @router.post("/login", response_model=TokenResponse)
 def login(
-    payload: LoginRequest, db: DatabaseSession, user_agent: UserAgent = None
+    payload: LoginRequest,
+    db: DatabaseSession,
+    client_ip: ClientIp = None,
+    user_agent: UserAgent = None,
 ) -> TokenResponse:
+    """Autentica e abre sessão, com bloqueio progressivo por e-mail e por IP.
+
+    A senha é o único segredo de baixa entropia do sistema — ver
+    `app/services/login_throttle.py` para a escada de bloqueio.
+    """
+    try:
+        check_login_allowed(db, email=payload.email, ip=client_ip)
+    except LoginBlocked as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Muitas tentativas de login. Tente novamente mais tarde.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
     user = db.scalar(select(User).where(User.email == payload.email))
     password_hash = user.hashed_password if user is not None else DUMMY_PASSWORD_HASH
     password_matches = verify_password(payload.password, password_hash)
     if user is None or not password_matches:
+        register_failed_login(db, email=payload.email, ip=client_ip)
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="E-mail ou senha inválidos",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    clear_login_failures(db, email=payload.email, ip=client_ip)
     return _start_session(db, user, user_agent)
 
 
@@ -127,14 +153,29 @@ def refresh(
 
 @router.post("/logout", response_model=MessageResponse)
 def logout(
-    payload: LogoutRequest, current_user: CurrentUser, db: DatabaseSession
+    payload: LogoutRequest, db: DatabaseSession, current_user: OptionalUser
 ) -> MessageResponse:
     """Revoga a sessão informada, ou todas as do usuário.
+
+    Encerrar **uma** sessão não exige access token: apresentar o refresh token já
+    é prova de posse, do mesmo jeito que em `/auth/refresh`. Exigir `CurrentUser`
+    aqui deixaria quem está com o access token vencido — 30 minutos depois — sem
+    como revogar um refresh token que ainda vale por 30 dias; descartá-lo no
+    cliente não encerra sessão nenhuma no servidor.
+
+    `all_devices` continua exigindo access token válido: derrubar todas as
+    sessões é uma ação sobre a conta inteira, não sobre o token apresentado.
 
     O access token em uso continua valendo até expirar — ele é stateless e não
     consulta esta tabela. Por isso o `ACCESS_TOKEN_EXPIRE_MINUTES` é curto.
     """
     if payload.all_devices:
+        if current_user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Encerrar todas as sessões exige um access token válido",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         revoked = revoke_all_for_user(db, current_user.id)
         db.commit()
         return MessageResponse(message=f"{revoked} sessão(ões) encerrada(s)")
@@ -143,7 +184,11 @@ def logout(
             status_code=422,
             detail="Informe o refresh_token ou use all_devices para encerrar tudo",
         )
-    revoke_refresh_token(db, payload.refresh_token, current_user.id)
+    # Autenticado, a revogação fica restrita às sessões de quem está chamando;
+    # anônimo, quem autoriza é a posse do próprio token apresentado.
+    revoke_refresh_token(
+        db, payload.refresh_token, current_user.id if current_user else None
+    )
     db.commit()
     # Sem distinguir "revoguei" de "não existia": um token de outro usuário não
     # deve ser confirmado como existente por quem está autenticado aqui.

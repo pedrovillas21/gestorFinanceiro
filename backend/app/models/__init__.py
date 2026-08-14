@@ -12,10 +12,12 @@ from app.models.investment import (
 )
 from app.models.pending_transaction import PendingTransaction
 from app.models.refresh_token import RefreshToken
+from app.models.login_attempt import LoginAttempt
 
 __all__ = [
     "User",
     "RefreshToken",
+    "LoginAttempt",
     "Transaction",
     "TelegramToken",
     "ImportJob",

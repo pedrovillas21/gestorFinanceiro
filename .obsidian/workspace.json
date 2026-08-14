@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "resume/06-viabilidade-cobertura-lacunas-backend.md",
+                "file": "resume/07-lacunas-backend-implementadas.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "06-viabilidade-cobertura-lacunas-backend"
+              "title": "07-lacunas-backend-implementadas"
             }
           }
         ]
@@ -187,19 +187,19 @@
   },
   "active": "1ab8a2ba20e0a7a5",
   "lastOpenFiles": [
-    "resume/07-lacunas-backend-implementadas.md.tmp.10712.37a21e48d5bc",
-    "resume/06-viabilidade-cobertura-lacunas-backend.md.tmp.10712.2605db7e38e9",
-    "resume/07-lacunas-backend-implementadas.md",
-    "resume/07-lacunas-backend-implementadas.md.tmp.10712.fcc3cbd92583",
-    "backend/tests/__pycache__/test_lacunas_dashboard.cpython-312.pyc",
-    "backend/alembic/versions/__pycache__/a91d3e5c7f60_add_refresh_tokens_and_telegram_unlink.cpython-312.pyc",
-    "backend/tests/test_lacunas_dashboard.py.tmp.10712.4a753b85ebad",
-    "backend/tests/test_lacunas_dashboard.py.tmp.10712.d0fdbf23b4b6",
-    "backend/tests/test_lacunas_dashboard.py.tmp.10712.c0eb354e0d2a",
-    "backend/tests/__pycache__/test_lacunas_dashboard.cpython-312-pytest-9.1.1.pyc",
-    "backend/tests/test_lacunas_dashboard.py",
-    "backend/tests/test_lacunas_dashboard.py.tmp.10712.d9abe4ce73cf",
+    "backend/alembic/versions/__pycache__/b8f2c1d90a44_add_login_attempts_throttle.cpython-312.pyc",
+    "backend/tests/test_lacunas_dashboard.py.tmp.14424.cc4ac6550843",
+    "backend/app/services/__pycache__/login_throttle.cpython-312.pyc",
+    "backend/app/models/__pycache__/login_attempt.cpython-312.pyc",
+    "backend/scripts/purge_access_lifecycle.py",
+    "backend/scripts/purge_access_lifecycle.py.tmp.14424.554e58896dc6",
+    "backend/app/models/__init__.py.tmp.14424.575782868efc",
+    "backend/alembic/versions/b8f2c1d90a44_add_login_attempts_throttle.py",
+    "backend/app/services/login_throttle.py",
+    "backend/app/models/login_attempt.py",
+    "resume/07-lacunas-backend-implementadas.md.tmp.14424.3a88fdae703d",
     "resume/06-viabilidade-cobertura-lacunas-backend.md",
+    "resume/07-lacunas-backend-implementadas.md",
     "resume/05-plano-funcionalidades-dashboard-frontend.md",
     "resume/04-funcionalidades-backend-telegram-dashboard.md",
     "resume/03-backend-bot-operacao-validacao-final.md",

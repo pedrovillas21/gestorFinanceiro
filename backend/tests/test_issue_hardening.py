@@ -31,7 +31,15 @@ def test_unknown_login_runs_dummy_bcrypt_comparison(monkeypatch) -> None:
         return False
 
     monkeypatch.setattr(auth, "verify_password", fake_verify)
-    db = SimpleNamespace(scalar=lambda statement: None)
+    # O login falho registra a tentativa no bloqueio progressivo, então a sessão
+    # falsa precisa aceitar escrita — só a comparação de senha é o assunto aqui.
+    db = SimpleNamespace(
+        scalar=lambda statement: None,
+        scalars=lambda statement: SimpleNamespace(all=lambda: []),
+        add=lambda row: None,
+        flush=lambda: None,
+        commit=lambda: None,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         auth.login(LoginRequest(email="missing@example.com", password="secret"), db)

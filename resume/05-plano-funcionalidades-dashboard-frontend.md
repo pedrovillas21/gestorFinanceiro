@@ -1,9 +1,17 @@
 # Plano de funcionalidades do dashboard front-end
 
 Data do levantamento: 11/08/2026
+Última atualização: 14/08/2026 — revisado contra as lacunas implementadas em
+`07-lacunas-backend-implementadas.md`.
 Base: código do back-end em `backend/app` (rotas `/api/v1`), conforme estado atual do branch `modelagemFrontEnd`.
 
 Este documento define **o que o dashboard precisa ter** para consumir tudo o que o back-end já entrega hoje. Ele complementa `04-funcionalidades-backend-telegram-dashboard.md`, que descreve o back-end; aqui a ótica é a da interface.
+
+> **Contrato válido:** este documento é a visão da interface sobre o mesmo
+> contrato descrito em `07-lacunas-backend-implementadas.md` — que é a fonte
+> canônica de autenticação, endpoints e mudanças de contrato. Os dois foram
+> conciliados em 14/08/2026; quando divergirem, o `07` vence e este aqui precisa
+> ser corrigido junto.
 
 ---
 
@@ -35,24 +43,34 @@ Configuração de ambiente: `WEB_APP_URL` e `CORS_ORIGINS` do back-end apontam p
 | --- | --- | --- |
 | `/auth/register` | POST | Cadastro |
 | `/auth/login` | POST | Login |
+| `/auth/refresh` | POST | Interceptor HTTP (renovação de sessão) — sem tela |
+| `/auth/logout` | POST | Menu do usuário → Sair; Configurações → Encerrar todas as sessões |
 | `/auth/me` | GET | Guard de sessão + menu do usuário |
+| `/auth/me` | PATCH | Configurações → Conta (editar nome) |
 | `/auth/me` | DELETE | Configurações → Excluir conta |
+| `/auth/change-password` | POST | Configurações → Alterar senha |
 | `/dashboard/summary` | GET | Visão geral (KPIs + gráfico por categoria) |
-| `/transactions` | GET | Transações → tabela com filtros e paginação |
+| `/dashboard/timeseries` | GET | Visão geral → gráfico de evolução |
+| `/transactions` | GET | Transações → tabela com filtros, ordenação e paginação |
 | `/transactions` | POST | Modal "Novo lançamento" |
 | `/transactions/{id}` | GET/PATCH/DELETE | Painel de detalhe / edição inline / confirmação de exclusão |
+| `/transactions/categories` | GET | Opções do filtro de categoria |
 | `/transactions/import` | POST | Transações → Importar planilha |
+| `/transactions/imports` | GET | Transações → Histórico de importações |
 | `/transactions/imports/{job_id}` | GET | Cartão de progresso da importação (polling) |
 | `/transactions/export` | GET | Botão "Exportar" (CSV/XLSX) |
 | `/investments/assets` | GET/POST | Investimentos → Ativos |
 | `/investments/assets/{id}` | PATCH/DELETE | Edição e exclusão de ativo |
 | `/investments/assets/{id}/movements` | GET/POST | Detalhe do ativo → extrato de movimentações |
-| `/investments/movements/{id}` | DELETE | Exclusão de movimentação |
+| `/investments/movements/{id}` | PATCH/DELETE | Edição e exclusão de movimentação |
 | `/investments/portfolio` | GET | Investimentos → Carteira consolidada |
+| `/investments/snapshots` | GET | Investimentos → curva de evolução do patrimônio |
+| `/investments/export` | GET | Investimentos → Exportar carteira (CSV/XLSX) |
 | `/investments/quotes/refresh` | POST | Botão "Atualizar cotações" |
 | `/calculators/compound-interest` | POST | Ferramentas → Simulador de juros compostos |
 | `/telegram/privacy-policy` e `/{version}` | GET | Modal de consentimento (leitura obrigatória) |
 | `/telegram/link` | POST/GET | Configurações → Conectar Telegram |
+| `/telegram/link` | DELETE | Configurações → Desconectar Telegram |
 | `/health` | GET | Indicador opcional de disponibilidade da API |
 
 Endpoints sem tela: `/telegram/webhook` (uso exclusivo do Telegram).
@@ -95,15 +113,25 @@ components/
 
 Funcionalidades:
 
-1. **Cadastro** (`POST /auth/register`): e-mail, senha e nome opcional. Já retorna o JWT — o usuário entra direto no dashboard sem passar pelo login.
+1. **Cadastro** (`POST /auth/register`): e-mail, senha e nome opcional. Já retorna o par de tokens — o usuário entra direto no dashboard sem passar pelo login.
    - Validações espelhando o back-end: e-mail com formato `algo@dominio.tld` (normalizado para minúsculas, 5–255 caracteres); senha de 8 a 72 **bytes UTF-8** (acentos contam mais de um byte — validar por `TextEncoder`, não por `length`); nome até 255 caracteres.
    - `409` → "E-mail já cadastrado".
 2. **Login** (`POST /auth/login`): 401 → mensagem genérica "E-mail ou senha inválidos", sem revelar se o e-mail existe.
-3. **Sessão:** guardar `access_token` e `expires_at` (validade padrão de 7 dias — `ACCESS_TOKEN_EXPIRE_MINUTES=10080`). O layout do dashboard valida a sessão com `GET /auth/me`.
-   - Não existe refresh token: ao chegar em `expires_at`, ou ao receber `401`, limpar o estado e redirecionar para o login com aviso "Sua sessão expirou".
-   - Logout é client-side (descarte do token); não há revogação no servidor.
-4. **Perfil:** exibir nome, e-mail e data de criação vindos de `GET /auth/me`.
-5. **Excluir conta** (`DELETE /auth/me`): ação destrutiva, exige confirmação digitando o e-mail. Deixar explícito que transações, investimentos e o vínculo do Telegram são apagados em cascata.
+   - **`429` depois de 5 falhas:** o back-end bloqueia de forma progressiva (10 min, depois 3 h, depois 24 h). Mensagem própria — não é "senha inválida" — e contagem regressiva a partir do cabeçalho `Retry-After`, que vem em segundos. Desabilitar o botão enquanto durar evita o usuário insistir e subir o próximo degrau.
+   - O bloqueio vale também para e-mail inexistente, de propósito: fosse diferente, o 429 viraria um jeito de descobrir quais contas existem.
+3. **Sessão:** `register`, `login`, `refresh` e `change-password` devolvem o mesmo `TokenResponse`: `access_token` + `expires_at` e `refresh_token` + `refresh_expires_at`. O layout do dashboard valida a sessão com `GET /auth/me`.
+   - **O access token dura 30 minutos** (`ACCESS_TOKEN_EXPIRE_MINUTES=30`); o refresh token dura 30 dias. Uma sessão sem renovação automática cai em meia hora — a renovação não é opcional.
+   - **O refresh token é opaco e rotacionado:** cada `POST /auth/refresh` devolve um valor novo e invalida o apresentado. Guardar sempre o último recebido, sobrescrevendo o anterior.
+   - **Interceptor:** em `401`, chamar `POST /auth/refresh` uma vez e repetir a requisição original; se o refresh falhar, limpar o estado e ir para o login com "Sua sessão expirou". `POST /auth/refresh` é rota **pública** — não mandar `Authorization` nela, ela existe justamente para quando o access token já expirou.
+   - **Single-flight obrigatório:** duas requisições que tomem 401 ao mesmo tempo e disparem dois refreshes com o mesmo token fazem o segundo cair na detecção de reuso, que **derruba todas as sessões do usuário**. As chamadas concorrentes têm de aguardar a mesma promessa de refresh. Vale também entre abas (`BroadcastChannel` ou lock no `localStorage`).
+4. **Logout** (`POST /auth/logout`):
+   - **Sessão atual:** `{refresh_token}`. Rota **pública** nesse modo — apresentar o refresh token já é a prova de posse. Funciona mesmo com o access token vencido, que é o caso comum de quem volta ao app depois de horas. Sempre chamar o endpoint antes de limpar o estado local: descartar o token só no cliente deixa a sessão viva no servidor por até 30 dias.
+   - **Todos os dispositivos:** `{all_devices: true}` exige `Authorization` com access token válido; sem ele, `401`. Se o usuário tomar esse 401, renovar via refresh e repetir.
+   - A resposta é `{message}` e é sempre a mesma para token inexistente ou já revogado — não usar o texto para inferir estado.
+   - O access token em uso continua valendo até expirar (é stateless); o logout encerra a sessão, não o token já emitido.
+5. **Perfil:** exibir nome, e-mail e data de criação vindos de `GET /auth/me`; editar o nome por `PATCH /auth/me` (**só `full_name`** — trocar e-mail não existe no back-end). Nome em branco vira `null`.
+6. **Alterar senha** (`POST /auth/change-password`): `{current_password, new_password, revoke_other_sessions?}`. `401` → "Senha atual incorreta"; `422` → nova senha igual à atual ou acima de 72 bytes. `revoke_other_sessions` tem padrão `true` e derruba os outros aparelhos — a resposta traz um par de tokens novo, que **precisa substituir o guardado**, senão o próprio usuário se desloga.
+7. **Excluir conta** (`DELETE /auth/me`): ação destrutiva, exige confirmação digitando o e-mail. Deixar explícito que transações, investimentos e o vínculo do Telegram são apagados em cascata.
 
 ### M2 — Shell do dashboard
 
@@ -114,10 +142,12 @@ Funcionalidades:
 
 ### M3 — Visão geral
 
-Fonte: `GET /dashboard/summary?start=&end=`.
+Fonte: `GET /dashboard/summary?start=&end=&type=` e `GET /dashboard/timeseries`.
 
 - Três KPIs: receitas, despesas e saldo (com cor conforme sinal).
 - Gráfico de despesas por categoria (`by_category`, já ordenado do maior para o menor). Rótulo "Sem categoria" já vem tratado pelo back-end.
+- **Composição de receitas:** o parâmetro `type` (padrão `expense`) escolhe o que `by_category` agrega, e a resposta traz `by_category_type` dizendo qual tipo foi agregado — usar esse campo no rótulo do gráfico em vez de assumir despesas.
+- **Gráfico de evolução** (`GET /dashboard/timeseries?granularity=day|week|month&start=&end=`, padrão `month`): períodos sem lançamento já vêm com zero, então o eixo não tem buracos. Acima de 1000 pontos o back-end devolve `422` — a UI deve escolher a granularidade a partir do tamanho do período em vez de deixar o usuário cair no erro.
 - Tabela compacta das categorias com valor e participação percentual (calculada no front sobre o total de despesas).
 - Atalhos: "Novo lançamento", "Importar planilha", "Ver todas as transações" (levando o mesmo período).
 - Bloco resumido da carteira (`GET /investments/portfolio`): valor de mercado, custo investido e ganho não realizado, com link para Investimentos.
@@ -129,8 +159,9 @@ Fonte: `GET /dashboard/summary?start=&end=`.
 
 Fonte: `GET /transactions` com `start`, `end`, `category`, `type`, `search`, `limit` (1–200, padrão 50), `offset`.
 
-1. **Tabela** (`@tanstack/react-table`) com data, descrição, categoria, tipo, forma de pagamento, origem e valor. Ordenação do back-end é fixa (data decrescente, depois id) — ordenar por outras colunas exige ordenação local da página ou novo parâmetro na API.
+1. **Tabela** (`@tanstack/react-table`) com data, descrição, categoria, tipo, forma de pagamento, origem e valor. Ordenação vem do servidor por `order_by` e `order` (padrão: data decrescente); o desempate por `id` é sempre aplicado, então paginar por offset não repete nem pula linhas. Ordenar a tabela deve refazer a consulta, não reordenar a página carregada.
 2. **Filtros:** período, tipo (receita/despesa), categoria e busca textual. A busca do back-end é `ILIKE` sobre descrição **e** categoria — explicitar isso no placeholder.
+   - As opções do filtro de categoria vêm de `GET /transactions/categories?start=&end=&type=`, que devolve `{category, count}` por frequência. Nulos e vazios não geram opção — "Sem categoria" continua sendo um estado da linha, não uma opção de filtro.
 3. **Paginação** por `limit`/`offset`, usando `total` para calcular as páginas.
 4. **Badge de origem:** `web` × `telegram`, para o usuário reconhecer o que entrou pelo bot.
 5. **Criar** (`POST /transactions`): descrição (1–255), valor > 0 com 2 casas, categoria opcional (até 100), tipo, forma de pagamento opcional (até 50), data/hora opcional.
@@ -163,7 +194,7 @@ Fonte: `POST /transactions/import` e `GET /transactions/imports/{job_id}`.
   - `pending`/`processing` (arquivos acima de 5 MiB) → cartão de progresso com *polling* em `GET /transactions/imports/{job_id}` a cada ~3 s;
   - `failed` → exibir `error_message` (o back-end devolve a mensagem de validação quando o erro é do arquivo).
 - Tratar `415` (extensão inválida), `413` (acima de 10 MiB) e `422` (arquivo vazio ou linha inválida) com mensagens distintas.
-- Como não há endpoint que liste importações, **persistir o `job_id` no `localStorage`** para retomar o acompanhamento se o usuário sair da página.
+- **Histórico de importações:** `GET /transactions/imports` devolve o envelope `{items, total, limit, offset}` — é a fonte da tela de histórico e permite retomar um job pendente sem depender do `localStorage`. O conteúdo do arquivo enviado **não** vem nessa listagem, por desenho.
 
 ### M6 — Investimentos
 
@@ -195,7 +226,8 @@ Regras adicionais para a UI:
 - `costs` é opcional, padrão 0, e nunca negativo.
 - `fx_rate` e `fx_rate_date` só fazem sentido juntos (validação servidor). Como o MVP é BRL, manter esses campos ocultos ou em uma seção avançada.
 - Erros de custódia chegam como `422` na criação ("venda sem custódia suficiente") e como `409` na exclusão ("a exclusão deixaria vendas sem custódia suficiente") — traduzir para linguagem clara e sugerir corrigir a movimentação anterior.
-- **Não existe PATCH de movimentação.** A correção é excluir e recriar; a UI deve oferecer um fluxo "Corrigir lançamento" que faça esses dois passos e trate a falha de custódia no meio do caminho.
+- **Edição** (`PATCH /investments/movements/{id}`): envio parcial, sem precisar reenviar a movimentação inteira. O servidor funde o envio com a linha atual e valida o **resultado**, então trocar só o `movement_type` pode tornar obrigatórios campos que não estavam no corpo — o formulário de edição deve seguir a mesma tabela de exigências por tipo acima. `422` na custódia negativa, e nesse caso a linha **não** é alterada.
+- **Paginação:** a lista de ativos e o extrato aceitam `limit` (padrão **200**) e `offset`. O padrão trunca silenciosamente carteiras maiores que isso — a UI precisa paginar de fato, não confiar na primeira página.
 
 #### 6.3 Carteira consolidada (`GET /investments/portfolio`)
 
@@ -208,6 +240,8 @@ Comportamentos obrigatórios:
 - Tabela de posições com quantidade, preço médio, custo investido, cotação atual, valor de mercado, ganho não realizado, ganho realizado, proventos (bruto e líquido) e retorno sobre custo.
 - **Selo de cotação desatualizada:** cada posição traz `quote.stale` (calculado com `QUOTE_STALE_AFTER_MINUTES`, padrão 60 min) e `quote.collected_at` — mostrar "atualizado há X" e destacar em amarelo quando `stale` for verdadeiro. Posição sem `quote` recebe selo "sem cotação".
 - Gráficos: alocação por ativo e por tipo de ativo (agregação feita no front a partir de `market_value`).
+- **Curva de evolução** (`GET /investments/snapshots?start=&end=&limit=`): lista pura, em ordem cronológica, das fotografias da carteira. As fotografias são geradas na atualização de cotações — por isso a curva só começa a existir depois da primeira atualização, o mesmo motivo que segura o TWR.
+- **Exportar carteira** (`GET /investments/export?format=csv|xlsx&sheet=positions|movements`): o XLSX traz as duas abas; no CSV o `sheet` escolhe qual sai. Endpoint autenticado — mesmo tratamento de download por blob do M4.9. Campo nulo vem como célula vazia, nunca zero.
 
 #### 6.4 Cotações (`POST /investments/quotes/refresh`)
 
@@ -237,6 +271,7 @@ Fluxo em Configurações, seguindo exatamente a ordem que o back-end exige:
    - `503` → política ainda não publicada no servidor.
 4. Exibir o `deep_link` como botão "Abrir no Telegram" **e** como QR Code, com contagem regressiva até `expires_at` (validade padrão de 30 minutos) e botão "Gerar novo link".
 5. Explicar o que o bot faz: registrar receitas/despesas por texto ou áudio e consultar saldo por `/saldo dia|semana|mes|3meses`.
+6. **Desconectar** (`DELETE /telegram/link`): `404` se não havia vínculo. Avisar na confirmação que a conversa pendente com o bot é descartada e que reconectar exige aceitar a política de novo. O histórico de consentimento é preservado no servidor — o que sai é o `chat_id`, ou seja, o bot para de aceitar mensagens daquele chat.
 
 ### M9 — Requisitos transversais
 
@@ -250,33 +285,60 @@ Fluxo em Configurações, seguindo exatamente a ordem que o back-end exige:
 
 ## 5. Lacunas do back-end que limitam o dashboard
 
-Estas funcionalidades são naturais em um dashboard, mas **não têm endpoint hoje**. Cada uma vem com a alternativa possível no front e a sugestão de API.
+O levantamento de 11/08/2026 listou 13 lacunas. **Doze foram implementadas** no
+back-end (detalhe em `07-lacunas-backend-implementadas.md`) e estão descritas nos
+módulos acima; a tabela abaixo fica como rastro do que era lacuna e virou o quê.
 
-| Lacuna | Impacto na UI | Alternativa imediata | Endpoint sugerido |
-| --- | --- | --- | --- |
-| Sem série temporal de receitas/despesas | Não há gráfico de evolução mensal, o gráfico mais esperado da visão geral | Paginar `/transactions` (200 por página) e agregar no cliente — caro e impreciso com muitos dados | `GET /dashboard/timeseries?granularity=month` |
-| `by_category` cobre só despesas | Não há gráfico de composição de receitas | Agregar no cliente | Parâmetro `type` em `/dashboard/summary` |
-| Sem lista de categorias distintas | O filtro de categoria não tem opções confiáveis | Montar a partir de `by_category` (só despesas) e das transações carregadas | `GET /transactions/categories` |
-| Sem listagem de importações | Histórico de importações impossível; é preciso guardar o `job_id` localmente | `localStorage` | `GET /transactions/imports` |
-| Sem `PATCH` de movimentação | Correção exige excluir e recriar, com risco de erro de custódia no meio | Fluxo guiado de excluir + recriar | `PATCH /investments/movements/{id}` |
-| `portfolio_snapshots` não exposto | Sem curva de evolução do patrimônio investido | Nenhuma | `GET /investments/snapshots` |
-| Sem alteração de senha ou recuperação | Configurações incompletas | Nenhuma | `POST /auth/change-password`, fluxo de reset |
-| Sem atualização de perfil (`full_name`) | Nome fixo no cadastro | Nenhuma | `PATCH /auth/me` |
-| Sem desvinculação do Telegram | Só é possível revogar excluindo a conta inteira | Nenhuma | `DELETE /telegram/link` |
-| Sem refresh token | Sessão cai de forma abrupta após 7 dias | Detectar `expires_at`/401 e avisar antes | `POST /auth/refresh` |
-| Sem paginação/filtro em ativos e movimentações | Carteiras grandes carregam tudo de uma vez | Filtrar no cliente | `limit`/`offset` nas rotas de investimentos |
-| Exportação só de transações | Não é possível exportar a carteira | Gerar CSV no cliente a partir do `portfolio` | `GET /investments/export` |
-| Ordenação da lista de transações é fixa | Ordenar por valor exige ordenar apenas a página atual | Ordenação local | Parâmetro `order_by` em `/transactions` |
+| Lacuna de 11/08 | Situação | Onde está no plano |
+| --- | --- | --- |
+| Sem série temporal de receitas/despesas | ✅ `GET /dashboard/timeseries` | M3 |
+| `by_category` cobre só despesas | ✅ `type` + `by_category_type` em `/dashboard/summary` | M3 |
+| Sem lista de categorias distintas | ✅ `GET /transactions/categories` | M4.2 |
+| Sem listagem de importações | ✅ `GET /transactions/imports` | M5 |
+| Sem `PATCH` de movimentação | ✅ `PATCH /investments/movements/{id}` | M6.2 |
+| `portfolio_snapshots` não exposto | ✅ `GET /investments/snapshots` | M6.3 |
+| Sem atualização de perfil (`full_name`) | ✅ `PATCH /auth/me` | M1.5 |
+| Sem alteração de senha | ✅ `POST /auth/change-password` | M1.6 |
+| Sem desvinculação do Telegram | ✅ `DELETE /telegram/link` | M8.6 |
+| Sem refresh token | ✅ `POST /auth/refresh` + `POST /auth/logout` com revogação no servidor | M1.3, M1.4 |
+| Sem paginação em ativos e movimentações | ✅ `limit`/`offset` | M6.2 |
+| Exportação só de transações | ✅ `GET /investments/export` | M6.3 |
+| Ordenação da lista de transações é fixa | ✅ `order_by`/`order` | M4.1 |
+| **Sem recuperação de senha esquecida** | ❌ **Continua aberta** | — |
 
-Nenhuma dessas lacunas bloqueia as fases 1 a 4 abaixo — elas apenas limitam gráficos e conveniências específicas.
+### 5.1 A única lacuna que permanece
+
+**Reset de senha por e-mail não existe** e ficou fora do escopo por decisão
+registrada (não há provedor de e-mail no projeto). `POST /auth/change-password`
+atende só quem lembra a senha atual.
+
+Consequência para a interface: a tela de login **não deve ter** "Esqueci minha
+senha" enquanto não houver endpoint — um link que leva a lugar nenhum é pior que
+a ausência dele. O usuário que esquecer a senha hoje não tem caminho de
+recuperação pela interface.
+
+### 5.2 Armadilhas de implementação herdadas do back-end
+
+Não são lacunas, são comportamentos que o front precisa respeitar:
+
+| Ponto | O que fazer |
+| --- | --- |
+| Rotação do refresh token derruba tudo se dois refreshes correrem juntos | Single-flight no interceptor, inclusive entre abas (M1.3) |
+| `limit` padrão 200 em ativos e movimentações | Paginar de verdade; a primeira página não é a carteira inteira (M6.2) |
+| Teto de 1000 pontos no `timeseries` | Derivar a granularidade do tamanho do período (M3) |
+| Access token revogado ainda vale até expirar | Não tratar logout/troca de senha como corte imediato de acesso; a janela é de até 30 min |
+| Login bloqueia progressivamente após 5 falhas | Tratar `429` com `Retry-After` na tela de login (M1.2) |
+| Fuso: transações/dashboard assumem `America/Sao_Paulo`, investimentos **rejeitam** data sem fuso | Enviar sempre ISO com offset explícito (M9) |
 
 ---
 
 ## 6. Fases de entrega sugeridas
 
 **Fase 1 — Fundação utilizável**
-Cliente HTTP com token, login, cadastro, guard de sessão, shell do dashboard, visão geral (`/dashboard/summary`) e CRUD completo de transações com filtros e paginação.
+Cliente HTTP com o par de tokens, **interceptor de refresh com single-flight**, login, cadastro, logout com revogação no servidor, guard de sessão, shell do dashboard, visão geral (`/dashboard/summary` + `/dashboard/timeseries`) e CRUD completo de transações com filtros, ordenação e paginação.
 *Entrega: o usuário consegue viver no dashboard sem depender do Telegram.*
+
+> O interceptor é pré-requisito de tudo o que vem depois: com access token de 30 minutos, qualquer tela testada por mais de meia hora começa a receber 401.
 
 **Fase 2 — Dados para dentro e para fora**
 Importação com acompanhamento de job, exportação CSV/XLSX autenticada e conexão com o Telegram (política, consentimento, deep link, status).
@@ -287,15 +349,18 @@ Ativos, movimentações com formulário dinâmico por tipo, carteira consolidada
 *Entrega: a parte do back-end hoje totalmente inacessível ao usuário final passa a ser utilizável.*
 
 **Fase 4 — Ferramentas e acabamento**
-Simulador de juros compostos, configurações de conta (incluindo exclusão), tema claro/escuro, estados vazios, acessibilidade e responsividade.
+Simulador de juros compostos, configurações de conta (alterar senha, editar nome, encerrar todas as sessões, excluir conta), tema claro/escuro, estados vazios, acessibilidade e responsividade.
 
 ---
 
 ## 7. Critérios de aceite
 
 - Toda rota autenticada do back-end tem, no dashboard, um caminho de uso pela interface — ou uma justificativa registrada aqui.
+- **Sessão:** uma aba aberta por mais de 30 minutos continua funcionando sem novo login, e o refresh token guardado é sempre o último recebido.
+- **Single-flight:** com o access token vencido, disparar várias requisições ao mesmo tempo produz **um** `POST /auth/refresh` — não vários. Um teste que force esse cenário faz parte do aceite, porque a falha aqui desloga o usuário de todos os aparelhos.
+- **Logout:** sair da conta com o access token já vencido revoga a sessão no servidor (o refresh token deixa de renovar), e não apenas limpa o estado local.
 - Nenhum valor monetário é formatado a partir de `float`; nenhum campo nulo da carteira aparece como `R$ 0,00`.
-- Erros `401`, `409`, `413`, `415`, `422` e `503` têm mensagem específica em português; `503` de cotação nunca derruba a página da carteira.
+- Erros `401`, `409`, `413`, `415`, `422`, `429` e `503` têm mensagem específica em português; `429` no login mostra a espera restante; `503` de cotação nunca derruba a página da carteira.
 - Datas exibidas em `America/Sao_Paulo`; datas enviadas em ISO com offset, e os períodos respeitam `end` exclusivo.
 - Importação acima de 5 MiB acompanha o job até `completed` ou `failed`, sobrevivendo a um recarregamento da página.
 - O aceite da política do Telegram só é possível após o texto ter sido apresentado, e a versão enviada é a mesma exibida.
@@ -309,6 +374,8 @@ Simulador de juros compostos, configurações de conta (incluindo exclusão), te
 - `backend/app/schemas/` (contratos que o front deve espelhar em `lib/types.ts`)
 - `backend/app/services/spreadsheets.py` (aliases de colunas e limites de importação)
 - `backend/app/services/quote_refresh.py` (cotações, fotografias e TWR)
-- `backend/app/core/config.py` (CORS, TTL do link do Telegram, validade da cotação)
+- `backend/app/services/sessions.py` (emissão, rotação e revogação de refresh token)
+- `backend/app/core/config.py` (validade dos tokens, CORS, TTL do link do Telegram, validade da cotação)
 - `frontend/package.json`, `frontend/AGENTS.md`
 - `resume/04-funcionalidades-backend-telegram-dashboard.md`
+- `resume/07-lacunas-backend-implementadas.md` — **fonte canônica do contrato**

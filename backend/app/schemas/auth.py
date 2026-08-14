@@ -64,7 +64,8 @@ class RefreshRequest(BaseModel):
 
 
 class LogoutRequest(BaseModel):
-    # Ausente quando o cliente perdeu o refresh token e só quer derrubar tudo.
+    # Ausente quando o cliente perdeu o refresh token e só quer derrubar tudo —
+    # caso que exige access token válido, ao contrário do logout de sessão única.
     refresh_token: str | None = Field(default=None, max_length=512)
     all_devices: bool = False
 

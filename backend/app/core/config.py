@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     TELEGRAM_LINK_TOKEN_TTL_MINUTES: int = 30
     PRIVACY_POLICY_VERSION: str = "2026-08-10"
 
+    # Ligue **apenas** quando houver proxy confiável na frente (load balancer da
+    # hospedagem). Ligada sem proxy, qualquer cliente forja o próprio IP no
+    # X-Forwarded-For e escapa do bloqueio por IP do login — ou bloqueia o IP de
+    # outra pessoa de propósito. Desligada atrás de proxy, todo mundo chega com o
+    # IP do proxy e um atacante só bloquearia a base inteira.
+    TRUST_PROXY_HEADERS: bool = False
+
     # Front-end (link enviado ao usuário ainda não vinculado)
     WEB_APP_URL: str = "http://localhost:3000"
     CORS_ORIGINS: str = "http://localhost:3000"
