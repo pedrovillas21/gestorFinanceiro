@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from io import BytesIO
 from types import SimpleNamespace
 import uuid
@@ -39,6 +40,9 @@ def test_unknown_login_runs_dummy_bcrypt_comparison(monkeypatch) -> None:
         add=lambda row: None,
         flush=lambda: None,
         commit=lambda: None,
+        # O INSERT do escopo novo roda dentro de um savepoint; sem banco aqui,
+        # basta um contexto que não faça nada.
+        begin_nested=nullcontext,
     )
 
     with pytest.raises(HTTPException) as exc_info:

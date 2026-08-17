@@ -169,22 +169,29 @@ def register_failed_login(db: Session, *, email: str | None, ip: str | None) -> 
             select(LoginAttempt).where(LoginAttempt.scope_hash == hash_).with_for_update()
         )
         if row is None:
-            # Contadores explícitos: os defaults do model só valem no flush, e
-            # até lá os atributos seriam `None` na aritmética da escada.
-            row = LoginAttempt(
-                id=uuid.uuid4(),
-                scope_kind=kind,
-                scope_hash=hash_,
-                failures=0,
-                lock_level=0,
-            )
-            db.add(row)
             try:
-                db.flush()
+                # Savepoint, e não `db.rollback()`: o escopo do e-mail já foi
+                # atualizado nesta mesma transação, e desfazê-la inteira faria a
+                # falha não ser contada em lugar nenhum. O `db.add` precisa ficar
+                # aqui dentro — `begin_nested()` faz flush do que estiver
+                # pendente *antes* de abrir o savepoint, então um add anterior
+                # escaparia dele e levaria o erro para a transação de fora.
+                with db.begin_nested():
+                    # Contadores explícitos: os defaults do model só valem no
+                    # flush, e até lá os atributos seriam `None` na aritmética.
+                    row = LoginAttempt(
+                        id=uuid.uuid4(),
+                        scope_kind=kind,
+                        scope_hash=hash_,
+                        failures=0,
+                        lock_level=0,
+                    )
+                    db.add(row)
+                    db.flush()
             except IntegrityError:
                 # Outra requisição criou a mesma linha entre o SELECT e o INSERT.
-                # Seguro desfazer: neste ponto a transação só tem esta escrita.
-                db.rollback()
+                # O savepoint já desfez só o INSERT perdido; a linha da outra
+                # requisição é lida agora, com lock, para receber esta falha.
                 row = db.scalar(
                     select(LoginAttempt)
                     .where(LoginAttempt.scope_hash == hash_)

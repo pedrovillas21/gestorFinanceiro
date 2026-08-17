@@ -56,7 +56,27 @@ class TokenResponse(BaseModel):
     # invalida o anterior. Guardar sempre o último recebido.
     refresh_token: str
     refresh_expires_at: datetime
+    # Identifica a linha desta sessão em GET /auth/sessions, para o cliente
+    # marcar "este dispositivo" na lista. Não é credencial: nenhuma rota
+    # autoriza nada a partir dele. Rotaciona junto com o refresh token — cada
+    # rotação cria uma linha nova —, então precisa ser guardado do mesmo jeito.
+    session_id: uuid.UUID
     user: UserResponse
+
+
+class SessionResponse(BaseModel):
+    """Uma sessão ativa, do jeito que o usuário a reconhece na tela.
+
+    Sem `last_used_at`: ele só é carimbado na linha revogada pela rotação, então
+    numa sessão ativa seria sempre nulo. `created_at` é que faz esse papel aqui.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    user_agent: str | None
+    created_at: datetime
+    expires_at: datetime
 
 
 class RefreshRequest(BaseModel):

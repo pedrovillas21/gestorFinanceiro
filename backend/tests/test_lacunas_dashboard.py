@@ -6,6 +6,7 @@ categorias, ordenação estável — não é alcançável aqui e está listado c
 validação manual em `resume/07-lacunas-backend-implementadas.md`.
 """
 
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from openpyxl import load_workbook
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 import pytest
 
 from app.api.dependencies import get_current_user, get_optional_user
@@ -30,6 +32,7 @@ from app.schemas.auth import (
     LoginRequest,
     LogoutRequest,
     ProfileUpdate,
+    SessionResponse,
     TokenResponse,
 )
 from app.services.login_throttle import (
@@ -42,6 +45,7 @@ from app.services.login_throttle import (
     ThrottleState,
     forget_stale_failures,
     lock_duration,
+    register_failed_login,
     register_failure,
     scope_hash,
     seconds_until_release,
@@ -50,6 +54,7 @@ from app.schemas.investment import MovementCreate, MovementUpdate
 from app.schemas.transaction import CategoryOption, TimeseriesPoint
 from app.services.sessions import (
     RefreshTokenError,
+    list_active_sessions,
     revoke_refresh_token,
     rotate_refresh_token,
 )
@@ -354,6 +359,78 @@ def test_logout_of_every_device_still_requires_a_valid_access_token() -> None:
     assert db.mass_revocations == 0
 
 
+class FakeListSession:
+    """Só o `scalars` de leitura, para inspecionar a consulta que a lista monta."""
+
+    def __init__(self, rows: list[RefreshToken] | None = None) -> None:
+        self.rows = rows or []
+        self.statements: list = []
+
+    def scalars(self, statement):  # noqa: ANN001 - assinatura do SQLAlchemy
+        self.statements.append(statement)
+        return SimpleNamespace(all=lambda: list(self.rows))
+
+
+def test_session_list_only_shows_what_is_still_usable() -> None:
+    """Revogada ou vencida não é aparelho conectado.
+
+    As revogadas continuam na tabela porque a detecção de reuso depende delas —
+    mas mostrá-las como sessão viva daria ao usuário uma lista de fantasmas.
+    """
+    user_id = uuid.uuid4()
+    db = FakeListSession()
+
+    list_active_sessions(db, user_id, limit=10, offset=5)
+
+    consulta = str(db.statements[0])
+    assert "revoked_at IS NULL" in consulta
+    assert "expires_at > " in consulta
+    # Ordem: atividade mais recente primeiro. Numa sessão ativa, `created_at` é a
+    # última atividade — cada rotação cria linha nova e revoga a anterior.
+    assert "ORDER BY refresh_tokens.created_at DESC" in consulta
+    assert "LIMIT" in consulta and "OFFSET" in consulta
+
+    binds = db.statements[0].compile().params
+    assert user_id in binds.values()
+    assert 10 in binds.values() and 5 in binds.values()
+
+
+def test_session_list_never_leaks_the_token_that_identifies_the_session() -> None:
+    """A tela é de reconhecimento de aparelho, não de recuperação de credencial."""
+    campos = set(SessionResponse.model_fields)
+
+    assert campos == {"id", "user_agent", "created_at", "expires_at"}
+    # `token_hash` no corpo não devolveria o token, mas devolveria o que basta
+    # para localizar a linha de outra pessoa caso vaze junto com um dump.
+    assert "token_hash" not in campos
+    # Fora de propósito: só é carimbado na linha que a rotação revoga, então numa
+    # sessão ativa seria sempre nulo e a UI mostraria "nunca usada".
+    assert "last_used_at" not in campos
+
+
+def test_token_response_tells_the_client_which_session_is_its_own() -> None:
+    """Sem isso a lista de aparelhos não sabe marcar "este dispositivo".
+
+    O access token é stateless e não sabe de qual linha nasceu — o servidor não
+    tem como calcular o "atual". Quem sabe é o cliente, comparando o
+    `session_id` que guardou com o `id` de cada linha da lista.
+    """
+    session = _stored_token("token-da-sessao")
+    usuario = SimpleNamespace(
+        id=session.user_id,
+        email="pessoa@example.com",
+        full_name=None,
+        created_at=datetime.now(UTC),
+    )
+
+    resposta = auth._token_response(usuario, "token-da-sessao", session)
+
+    assert resposta.session_id == session.id
+    # Rotaciona junto com o refresh token: cada rotação é uma linha nova, e o
+    # cliente precisa sobrescrever os dois valores pelo par recebido.
+    assert resposta.refresh_expires_at == session.expires_at
+
+
 def test_expired_access_token_identifies_nobody_instead_of_failing() -> None:
     """`get_optional_user` não pode dar 401: o cliente manda o header velho.
 
@@ -459,6 +536,62 @@ def test_throttle_never_stores_the_email_or_the_ip() -> None:
     assert len(hash_) == 64  # SHA-256 em hexadecimal cabe no String(64).
     # Escopos diferentes não colidem mesmo com o mesmo valor.
     assert scope_hash("ip", "pessoa@example.com") != hash_
+
+
+def test_race_on_the_ip_scope_keeps_the_email_scope_counted() -> None:
+    """A corrida no INSERT do IP não pode apagar a falha já contada no e-mail.
+
+    Os dois escopos são atualizados na mesma transação, e o do e-mail vem
+    primeiro. Um `db.rollback()` para tratar a corrida do IP levaria junto a
+    escrita do e-mail — e o `commit` logo depois, em `auth.login`, gravaria uma
+    tentativa a menos justamente no escopo que mais importa.
+    """
+
+    class SessaoComCorridaNoIp:
+        """Escopo do e-mail já existe; o do IP perde a corrida do INSERT."""
+
+        def __init__(self, linha_email, linha_ip) -> None:  # noqa: ANN001
+            self.linha_email = linha_email
+            self.linha_ip = linha_ip
+            self.selects = 0
+            self.savepoints = 0
+            self.rollbacks = 0
+
+        def scalar(self, statement):  # noqa: ANN001 - assinatura do SQLAlchemy
+            self.selects += 1
+            if self.selects == 1:
+                return self.linha_email
+            if self.selects == 2:
+                return None  # o escopo do IP ainda não existe...
+            return self.linha_ip  # ...e na releitura já existe, criado pela outra.
+
+        @contextmanager
+        def begin_nested(self):
+            self.savepoints += 1
+            yield  # o corpo é o INSERT que perde a corrida
+
+        def add(self, row) -> None:  # noqa: ANN001
+            pass
+
+        def flush(self) -> None:
+            raise IntegrityError("INSERT", None, Exception("scope_hash duplicado"))
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+    vazia = {"failures": 0, "lock_level": 0, "last_failure_at": None, "locked_until": None}
+    linha_email = SimpleNamespace(**vazia)
+    linha_ip = SimpleNamespace(**vazia)
+    db = SessaoComCorridaNoIp(linha_email, linha_ip)
+
+    register_failed_login(db, email="alvo@example.com", ip="203.0.113.7")
+
+    # O INSERT perdido foi desfeito por savepoint, não desfazendo a transação.
+    assert db.savepoints == 1
+    assert db.rollbacks == 0
+    # E a falha ficou contada nos dois escopos, não só no do IP.
+    assert linha_email.failures == 1
+    assert linha_ip.failures == 1
 
 
 def test_blocked_login_answers_429_without_touching_the_password() -> None:
@@ -627,6 +760,7 @@ def test_gap_endpoints_are_registered() -> None:
     assert {
         "/api/v1/auth/refresh",
         "/api/v1/auth/logout",
+        "/api/v1/auth/sessions",
         "/api/v1/auth/change-password",
         "/api/v1/dashboard/timeseries",
         "/api/v1/transactions/categories",

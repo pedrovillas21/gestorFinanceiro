@@ -19,10 +19,14 @@ Das 14 lacunas levantadas no documento 06, **13 foram implementadas**. A restant
 | Migrations | 2 (`a91d3e5c7f60`, `b8f2c1d90a44`) |
 | Arquivos novos | 8 de código + 1 de teste |
 | Arquivos alterados | 23 |
-| Testes | 99 passando (68 antes + 19 das lacunas + 12 da revisão de 14/08) |
+| Testes | 103 passando (68 antes + 19 das lacunas + 12 da revisão de 14/08 + 4 da auditoria de 17/08) |
 
 **O que ainda depende de você:** agendar o cron da limpeza (seção 7.1) e decidir
 `TRUST_PROXY_HEADERS` conforme o deploy (seção 7.5.1).
+
+> O índice de tudo que continua em aberto no projeto — aqui, no front-end e na
+> operação — está em `08-pendencias-futuras.md`. Este documento segue sendo o
+> detalhe; aquele é a lista.
 
 ### 1.1 Revisão de 14/08/2026
 
@@ -36,6 +40,18 @@ dois que estavam registrados aqui como pendentes:
 | `05` e `07` descreviam contratos divergentes | `resume/05-…md`, seção 6 daqui | Documentos conciliados; `07` é a fonte canônica |
 | Tabelas de acesso cresciam sem limite | `scripts/purge_access_lifecycle.py` | Limpeza agendada, em lotes — seção 7.1 |
 | `/auth/login` sem defesa contra força bruta | `app/services/login_throttle.py`, migration `b8f2c1d90a44` | Bloqueio progressivo 10 min → 3 h → 24 h — seção 7.5 |
+
+### 1.2 Auditoria de 17/08/2026
+
+As 33 rotas foram conferidas contra o `05`. Doze divergências eram de documento e
+foram corrigidas lá. **Uma era de código** e foi implementada aqui:
+
+| Ponto | Onde | Resolução |
+| --- | --- | --- |
+| `refresh_tokens` guardava `user_agent`, `created_at` e `last_used_at` para uma lista de sessões que nenhuma rota expunha | `app/api/v1/auth.py`, `app/services/sessions.py`, `app/schemas/auth.py` | `GET /auth/sessions` + `session_id` no `TokenResponse` — seções 5 e 6 |
+
+Sem migration: a rota lê colunas que já existiam, pelo índice
+`ix_refresh_tokens_user_expires` que já existia. Testes passaram de 99 para 103.
 
 ---
 
@@ -241,15 +257,32 @@ transação e ficaria órfã, esperando um "sim" que não pode mais chegar.
 | GET | `/investments/export` | Sim | `format=csv\|xlsx`, `sheet=positions\|movements` |
 | PATCH | `/investments/movements/{id}` | Sim | Envio parcial. 422 na custódia negativa |
 | DELETE | `/telegram/link` | Sim | 404 se não havia vínculo |
+| GET | `/auth/sessions` | Sim | **17/08.** Sessões ativas do usuário (não revogadas e dentro da validade), da mais recente para a mais antiga. `limit` (padrão 50, teto 200) e `offset`; lista pura. Campos: `id`, `user_agent`, `created_at`, `expires_at` |
 
 > São 11 linhas para 9 endpoints novos: `PATCH /auth/me` e `DELETE /telegram/link`
-> são métodos novos em rotas que já existiam.
+> são métodos novos em rotas que já existiam. A última linha é da auditoria de
+> 17/08 e não entra nessa conta.
+
+Sobre `GET /auth/sessions`, quatro decisões de que o contrato depende:
+
+- **Exige access token válido**, não refresh token: ver os aparelhos conectados é
+  ação sobre a conta inteira, mesmo critério do `logout` com `all_devices`.
+- **Não devolve `last_used_at`.** A coluna só é carimbada na linha que a rotação
+  revoga — numa sessão ativa seria sempre nula, e a UI mostraria "nunca usada"
+  para todo mundo. Quem faz esse papel é `created_at`, que numa sessão ativa é a
+  **última atividade**: cada renovação cria linha nova e revoga a anterior.
+- **Não existe campo dizendo qual é a sessão atual.** O access token é stateless e
+  não sabe de qual linha nasceu; o servidor não tem como calcular isso. Quem sabe
+  é o cliente, comparando o `session_id` que guardou com o `id` de cada linha.
+- **Não há rota para encerrar uma sessão específica.** A única ação sobre a lista
+  é `POST /auth/logout {all_devices: true}`.
 
 ### Alterados
 
 | Rota | Mudança | Quebra contrato? |
 | --- | --- | --- |
-| `POST /auth/register` | Resposta ganhou `refresh_token`, `refresh_expires_at` | Não (aditivo) |
+| `POST /auth/register` | Resposta ganhou `refresh_token`, `refresh_expires_at` e, em 17/08, `session_id` | Não (aditivo) |
+| `POST /auth/refresh`, `/auth/login`, `/auth/change-password` | Idem: o `TokenResponse` é o mesmo nas quatro rotas | Não (aditivo) |
 | `POST /auth/login` | Idem, mais **429 com `Retry-After`** após 5 falhas (seção 7.5) | Não no corpo; o cliente precisa **tratar 429** |
 | `GET /dashboard/summary` | Parâmetro `type` (padrão `expense`); resposta ganhou `by_category_type` | Não (aditivo, padrão preserva o comportamento) |
 | `GET /transactions` | Parâmetros `order_by` e `order` | Não (aditivo, padrão preserva a ordem) |
@@ -313,6 +346,22 @@ A lista completa do que mudou em relação ao levantamento de 11/08:
     aviso** se o cliente não paginar.
 18. **Detecção de reuso derruba todas as sessões** quando dois refreshes correm
     com o mesmo token. Ver 6.1.
+
+**Acrescentado em 17/08**
+
+19. **O `TokenResponse` já traz o `user` completo** (`id`, `email`, `full_name`,
+    `created_at`). Register, login, refresh e change-password hidratam o estado do
+    usuário sem roundtrip — `GET /auth/me` só é necessário no boot frio, quando a
+    aplicação sobe com um token guardado e ainda não sabe de quem ele é. O campo
+    já existia; o que faltava era estar escrito.
+20. **`session_id` é campo novo no `TokenResponse`.** Identifica a linha desta
+    sessão em `GET /auth/sessions`, para o cliente marcar "este dispositivo" na
+    lista. Não é credencial — nenhuma rota autoriza nada a partir dele — mas
+    **rotaciona junto com o refresh token**: cada rotação cria linha nova, então
+    guardar o par recebido passou a ser guardar três valores, não dois.
+21. **`POST /auth/logout` com corpo vazio devolve 422.** Sem `refresh_token` e sem
+    `all_devices: true` não há o que revogar. Comportamento pré-existente, não
+    documentado até aqui.
 
 ### 6.1 Como o interceptor precisa se comportar
 
@@ -529,8 +578,8 @@ A suíte não abre conexão — por desenho, documentado no `conftest`. Tudo que
 
 ## 8. Cobertura de teste
 
-`backend/tests/test_lacunas_dashboard.py` — 31 testes, no padrão da casa: função
-pura, contrato de schema e registro de rota. Suíte completa: **99 passando**.
+`backend/tests/test_lacunas_dashboard.py` — 35 testes, no padrão da casa: função
+pura, contrato de schema e registro de rota. Suíte completa: **103 passando**.
 
 Cobre:
 
@@ -546,6 +595,10 @@ Cobre:
 - o logout: sessão única sem usuário identificado revoga; `all_devices` sem
   access token válido dá 401; credencial vencida vira usuário anônimo em
   `get_optional_user` em vez de 401, e continua sendo 401 em `get_current_user`;
+- a lista de sessões (17/08): o filtro por não revogada e não vencida, a ordem por
+  atividade mais recente, o `limit`/`offset` chegando na consulta, o corpo da
+  resposta não vazando `token_hash` nem expondo `last_used_at`, e o `session_id`
+  saindo no `TokenResponse`;
 - a escada do bloqueio de login — os três degraus e o teto, o esquecimento em dois
   tempos, a tolerância maior do escopo de IP, o fato de o hash não conter o e-mail,
   e o 429 sem consultar usuário nem rodar bcrypt. Inclui a **invariante que

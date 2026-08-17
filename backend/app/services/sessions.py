@@ -82,6 +82,35 @@ def rotate_refresh_token(
     return new_token, new_session
 
 
+def list_active_sessions(
+    db: Session, user_id: uuid.UUID, *, limit: int = 50, offset: int = 0
+) -> list[RefreshToken]:
+    """Sessões ainda válidas do usuário, da mais recente para a mais antiga.
+
+    Ativa é a linha não revogada e ainda dentro da validade. As revogadas
+    continuam na tabela — a detecção de reuso depende delas — mas não são
+    aparelho conectado nenhum e ficariam de fora de qualquer lista útil.
+
+    `created_at` aqui é a **última atividade** da sessão, não o primeiro login:
+    cada rotação cria uma linha nova e revoga a anterior. Por isso
+    `last_used_at`, que só é carimbado na linha que está sendo revogada, seria
+    sempre nulo numa sessão ativa e não entra na resposta.
+    """
+    return list(
+        db.scalars(
+            select(RefreshToken)
+            .where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked_at.is_(None),
+                RefreshToken.expires_at > datetime.now(UTC),
+            )
+            .order_by(RefreshToken.created_at.desc(), RefreshToken.id.desc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
+    )
+
+
 def revoke_refresh_token(
     db: Session, token: str, user_id: uuid.UUID | None = None
 ) -> bool:

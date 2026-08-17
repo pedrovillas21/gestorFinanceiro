@@ -1,8 +1,9 @@
 # Plano de funcionalidades do dashboard front-end
 
 Data do levantamento: 11/08/2026
-Última atualização: 14/08/2026 — revisado contra as lacunas implementadas em
-`07-lacunas-backend-implementadas.md`.
+Última atualização: 17/08/2026 — auditoria das 33 rotas do back-end contra este
+plano: 12 divergências de contrato corrigidas aqui e `GET /auth/sessions`
+implementado no back-end.
 Base: código do back-end em `backend/app` (rotas `/api/v1`), conforme estado atual do branch `modelagemFrontEnd`.
 
 Este documento define **o que o dashboard precisa ter** para consumir tudo o que o back-end já entrega hoje. Ele complementa `04-funcionalidades-backend-telegram-dashboard.md`, que descreve o back-end; aqui a ótica é a da interface.
@@ -35,6 +36,11 @@ Dependências já instaladas e que este plano assume:
 
 Configuração de ambiente: `WEB_APP_URL` e `CORS_ORIGINS` do back-end apontam para `http://localhost:3000`. O front precisa de `NEXT_PUBLIC_API_URL` apontando para a base da API (`http://localhost:8000`), consumindo sempre o prefixo `/api/v1`.
 
+> **Exceção ao prefixo:** `GET /health` está montado na raiz da aplicação
+> (`app/main.py`), fora de `/api/v1`. É a única rota nessa condição. O cliente
+> HTTP com `baseURL` terminando em `/api/v1` não a alcança — o indicador de
+> disponibilidade precisa montar a URL a partir da base sem o prefixo.
+
 ---
 
 ## 2. Mapa: endpoint do back-end → tela do dashboard
@@ -45,6 +51,7 @@ Configuração de ambiente: `WEB_APP_URL` e `CORS_ORIGINS` do back-end apontam p
 | `/auth/login` | POST | Login |
 | `/auth/refresh` | POST | Interceptor HTTP (renovação de sessão) — sem tela |
 | `/auth/logout` | POST | Menu do usuário → Sair; Configurações → Encerrar todas as sessões |
+| `/auth/sessions` | GET | Configurações → Dispositivos conectados |
 | `/auth/me` | GET | Guard de sessão + menu do usuário |
 | `/auth/me` | PATCH | Configurações → Conta (editar nome) |
 | `/auth/me` | DELETE | Configurações → Excluir conta |
@@ -71,9 +78,13 @@ Configuração de ambiente: `WEB_APP_URL` e `CORS_ORIGINS` do back-end apontam p
 | `/telegram/privacy-policy` e `/{version}` | GET | Modal de consentimento (leitura obrigatória) |
 | `/telegram/link` | POST/GET | Configurações → Conectar Telegram |
 | `/telegram/link` | DELETE | Configurações → Desconectar Telegram |
-| `/health` | GET | Indicador opcional de disponibilidade da API |
+| `/health` | GET | Indicador opcional de disponibilidade da API — **fora do prefixo `/api/v1`** |
 
 Endpoints sem tela: `/telegram/webhook` (uso exclusivo do Telegram).
+
+A auditoria de 17/08/2026 conferiu o mapa nos dois sentidos, contra o
+`openapi()` da aplicação: nenhum endpoint ficou sem tela prevista e nenhuma tela
+aponta para rota inexistente.
 
 ---
 
@@ -93,7 +104,7 @@ app/
     investimentos/ativos/page.tsx
     investimentos/ativos/[id]/page.tsx
     ferramentas/juros-compostos/page.tsx
-    configuracoes/page.tsx      # conta, Telegram, exclusão
+    configuracoes/page.tsx      # conta, Telegram, dispositivos conectados, exclusão
 lib/
   api/client.ts                 # axios + baseURL + Authorization + tratamento 401
   api/{auth,transactions,dashboard,investments,calculator,telegram}.ts
@@ -119,19 +130,29 @@ Funcionalidades:
 2. **Login** (`POST /auth/login`): 401 → mensagem genérica "E-mail ou senha inválidos", sem revelar se o e-mail existe.
    - **`429` depois de 5 falhas:** o back-end bloqueia de forma progressiva (10 min, depois 3 h, depois 24 h). Mensagem própria — não é "senha inválida" — e contagem regressiva a partir do cabeçalho `Retry-After`, que vem em segundos. Desabilitar o botão enquanto durar evita o usuário insistir e subir o próximo degrau.
    - O bloqueio vale também para e-mail inexistente, de propósito: fosse diferente, o 429 viraria um jeito de descobrir quais contas existem.
-3. **Sessão:** `register`, `login`, `refresh` e `change-password` devolvem o mesmo `TokenResponse`: `access_token` + `expires_at` e `refresh_token` + `refresh_expires_at`. O layout do dashboard valida a sessão com `GET /auth/me`.
+3. **Sessão:** `register`, `login`, `refresh` e `change-password` devolvem o mesmo `TokenResponse`: `access_token` + `expires_at`, `refresh_token` + `refresh_expires_at`, `session_id` e **`user` completo**.
+   - **O `user` vem embutido na resposta** (`UserResponse` inteiro: `id`, `email`, `full_name`, `created_at`). Depois de logar, cadastrar, renovar ou trocar a senha, o estado do usuário se hidrata direto do `TokenResponse` — **sem chamar `GET /auth/me`**. O `/auth/me` continua necessário só no boot frio, quando a aplicação sobe com um token guardado e ainda não sabe de quem ele é.
+   - **`session_id`** identifica a linha desta sessão em `GET /auth/sessions` (M1.8) e é o que permite marcar "este dispositivo" na lista. Não é credencial. Rotaciona junto com o refresh token, então guardar os dois é a mesma operação — ver o item seguinte.
    - **O access token dura 30 minutos** (`ACCESS_TOKEN_EXPIRE_MINUTES=30`); o refresh token dura 30 dias. Uma sessão sem renovação automática cai em meia hora — a renovação não é opcional.
-   - **O refresh token é opaco e rotacionado:** cada `POST /auth/refresh` devolve um valor novo e invalida o apresentado. Guardar sempre o último recebido, sobrescrevendo o anterior.
+   - **O refresh token é opaco e rotacionado:** cada `POST /auth/refresh` devolve um valor novo e invalida o apresentado. Guardar sempre o último recebido, sobrescrevendo o anterior — e junto com ele o `session_id`, que também muda a cada rotação (a rotação cria uma linha nova de sessão).
    - **Interceptor:** em `401`, chamar `POST /auth/refresh` uma vez e repetir a requisição original; se o refresh falhar, limpar o estado e ir para o login com "Sua sessão expirou". `POST /auth/refresh` é rota **pública** — não mandar `Authorization` nela, ela existe justamente para quando o access token já expirou.
    - **Single-flight obrigatório:** duas requisições que tomem 401 ao mesmo tempo e disparem dois refreshes com o mesmo token fazem o segundo cair na detecção de reuso, que **derruba todas as sessões do usuário**. As chamadas concorrentes têm de aguardar a mesma promessa de refresh. Vale também entre abas (`BroadcastChannel` ou lock no `localStorage`).
 4. **Logout** (`POST /auth/logout`):
    - **Sessão atual:** `{refresh_token}`. Rota **pública** nesse modo — apresentar o refresh token já é a prova de posse. Funciona mesmo com o access token vencido, que é o caso comum de quem volta ao app depois de horas. Sempre chamar o endpoint antes de limpar o estado local: descartar o token só no cliente deixa a sessão viva no servidor por até 30 dias.
    - **Todos os dispositivos:** `{all_devices: true}` exige `Authorization` com access token válido; sem ele, `401`. Se o usuário tomar esse 401, renovar via refresh e repetir.
+   - **Corpo vazio é `422`:** sem `refresh_token` e sem `all_devices: true` o back-end responde "Informe o refresh_token ou use all_devices para encerrar tudo". Um `POST /auth/logout {}` não é "sair de qualquer jeito" — o cliente que perdeu o refresh token precisa mandar `all_devices: true` explicitamente.
    - A resposta é `{message}` e é sempre a mesma para token inexistente ou já revogado — não usar o texto para inferir estado.
    - O access token em uso continua valendo até expirar (é stateless); o logout encerra a sessão, não o token já emitido.
 5. **Perfil:** exibir nome, e-mail e data de criação vindos de `GET /auth/me`; editar o nome por `PATCH /auth/me` (**só `full_name`** — trocar e-mail não existe no back-end). Nome em branco vira `null`.
 6. **Alterar senha** (`POST /auth/change-password`): `{current_password, new_password, revoke_other_sessions?}`. `401` → "Senha atual incorreta"; `422` → nova senha igual à atual ou acima de 72 bytes. `revoke_other_sessions` tem padrão `true` e derruba os outros aparelhos — a resposta traz um par de tokens novo, que **precisa substituir o guardado**, senão o próprio usuário se desloga.
 7. **Excluir conta** (`DELETE /auth/me`): ação destrutiva, exige confirmação digitando o e-mail. Deixar explícito que transações, investimentos e o vínculo do Telegram são apagados em cascata.
+8. **Dispositivos conectados** (`GET /auth/sessions`): lista das sessões ainda válidas, da atividade mais recente para a mais antiga. Cada item traz `id`, `user_agent`, `created_at` e `expires_at`.
+   - `user_agent` é o rótulo do aparelho e **pode ser nulo** (cliente sem cabeçalho `User-Agent`: script, `curl`). Cair para "Dispositivo desconhecido" em vez de deixar a linha sem título.
+   - `created_at` é a **última atividade**, não o primeiro login: cada renovação de token cria uma sessão nova e revoga a anterior. Rotular como "Ativa desde", não como "Conectado em".
+   - **Marcar a sessão atual comparando `id` com o `session_id` guardado** (M1.3). O servidor não sabe qual é a atual — o access token é stateless e não guarda de qual sessão nasceu.
+   - Lista pura, sem `total`, com `limit` (padrão 50, máx 200) e `offset`. Na prática cabe numa página só; paginar até receber menos itens que o `limit` se quiser garantir.
+   - Sessões revogadas e vencidas **não** aparecem: a lista é de aparelhos conectados agora, não de histórico.
+   - A única ação disponível sobre a lista é **Encerrar todas as sessões** (`POST /auth/logout {all_devices: true}`) — não existe endpoint para derrubar uma sessão específica. Não desenhar um botão "encerrar" por linha.
 
 ### M2 — Shell do dashboard
 
@@ -163,14 +184,16 @@ Fonte: `GET /transactions` com `start`, `end`, `category`, `type`, `search`, `li
 2. **Filtros:** período, tipo (receita/despesa), categoria e busca textual. A busca do back-end é `ILIKE` sobre descrição **e** categoria — explicitar isso no placeholder.
    - As opções do filtro de categoria vêm de `GET /transactions/categories?start=&end=&type=`, que devolve `{category, count}` por frequência. Nulos e vazios não geram opção — "Sem categoria" continua sendo um estado da linha, não uma opção de filtro.
 3. **Paginação** por `limit`/`offset`, usando `total` para calcular as páginas.
-4. **Badge de origem:** `web` × `telegram`, para o usuário reconhecer o que entrou pelo bot.
+4. **Badge de origem:** `source` tem **três** valores, não dois — `web`, `telegram` e `import`. Quem entrou por planilha grava `source="import"` (`services/spreadsheets.py`), e numa base migrada de planilha esse é o volume maior. Um badge binário renderiza vazio ou errado justamente na maioria das linhas. Tratar os três explicitamente e ter um rótulo de fallback para valor desconhecido.
 5. **Criar** (`POST /transactions`): descrição (1–255), valor > 0 com 2 casas, categoria opcional (até 100), tipo, forma de pagamento opcional (até 50), data/hora opcional.
    - Enviar `occurred_at` em ISO. Datas sem fuso são interpretadas como `America/Sao_Paulo` pelo back-end; o mais seguro é enviar o offset explícito.
    - `source` é definido pelo servidor como `web` — não enviar.
 6. **Editar** (`PATCH`): envio parcial. Campos `description`, `amount`, `type` e `occurred_at` não aceitam `null` (422).
 7. **Excluir** (`DELETE`): confirmação e remoção otimista com desfazer.
 8. **Ações em lote:** desejáveis (excluir várias, recategorizar), mas hoje exigiriam N chamadas — implementar apenas se aceitarmos o custo, ou aguardar endpoint em lote.
-9. **Exportar** (`GET /transactions/export?format=csv|xlsx&start=&end=`): o endpoint é autenticado, então **não funciona em `<a href>` simples** — baixar via `axios` com `responseType: "blob"` e disparar o download a partir do objeto URL. Respeitar o período ativo nos filtros.
+9. **Exportar** (`GET /transactions/export?format=csv|xlsx&start=&end=`): o endpoint é autenticado, então **não funciona em `<a href>` simples** — baixar via `axios` com `responseType: "blob"` e disparar o download a partir do objeto URL.
+   - **A exportação aceita só `format`, `start` e `end`.** `category`, `type` e `search` **não** são parâmetros dessa rota — mandá-los é inofensivo e inútil, o servidor ignora. Quem filtrou por "Mercado" e clicou em Exportar recebe o período inteiro, sem filtro de categoria.
+   - Por isso o botão não pode se chamar "Exportar resultados". Rotular pelo que ele faz de verdade — "Exportar período" — e, quando houver filtro de categoria, tipo ou busca ativo, avisar antes do download que o arquivo sai com o período completo. Um alerta ao lado do botão custa menos que um usuário conferindo a planilha errada.
 
 ### M5 — Importação de planilhas
 
@@ -189,12 +212,17 @@ Fonte: `POST /transactions/import` e `GET /transactions/imports/{job_id}`.
   | Data | `occurred_at`, `data`, `date` — formato `AAAA-MM-DD` |
 
   Oferecer download de um modelo CSV gerado no front.
-- **A resposta é sempre HTTP 202**, mesmo quando o processamento foi síncrono. A UI deve olhar o campo `status`:
+- **Há dois caminhos de resposta, não um.** O que decide é o tamanho do arquivo (corte em 5 MiB), e o front precisa tratar os dois:
+  - **Assíncrono (acima de 5 MiB):** `202` com o job, e o processamento acontece depois. Aqui, e só aqui, `status: "failed"` chega **dentro de um `202`** — o erro é do processamento, que já não estava mais na requisição. Acompanhar por `GET /transactions/imports/{job_id}`.
+  - **Síncrono (até 5 MiB):** a importação roda na própria requisição. Se der certo, `202` com `status: "completed"`. Se o arquivo for inválido, a resposta é **`422`** (mensagem de validação em `detail`) ou **`500`** ("Falha ao importar a planilha") — **sem corpo de job**. O `catch` não pode assumir que existe um `job_id` para consultar; ele precisa exibir o `detail` direto.
+  - Em ambos os casos o job fica gravado com `status: "failed"` e aparece no histórico — mas na resposta síncrona o cliente descobre isso pelo código HTTP, não pelo corpo.
+- Estados do campo `status`, quando há corpo de job:
   - `completed` → mostrar `imported_rows` de `total_rows` e recarregar a lista;
-  - `pending`/`processing` (arquivos acima de 5 MiB) → cartão de progresso com *polling* em `GET /transactions/imports/{job_id}` a cada ~3 s;
-  - `failed` → exibir `error_message` (o back-end devolve a mensagem de validação quando o erro é do arquivo).
-- Tratar `415` (extensão inválida), `413` (acima de 10 MiB) e `422` (arquivo vazio ou linha inválida) com mensagens distintas.
+  - `pending`/`processing` → cartão de progresso com *polling* em `GET /transactions/imports/{job_id}` a cada ~3 s;
+  - `failed` → exibir `error_message`.
+- Tratar `415` (extensão inválida), `413` (acima de 10 MiB), `422` (arquivo vazio ou linha inválida) e `500` (falha inesperada do processamento síncrono) com mensagens distintas.
 - **Histórico de importações:** `GET /transactions/imports` devolve o envelope `{items, total, limit, offset}` — é a fonte da tela de histórico e permite retomar um job pendente sem depender do `localStorage`. O conteúdo do arquivo enviado **não** vem nessa listagem, por desenho.
+  - **Atenção ao `limit`:** aqui o padrão é **20** e o teto é **100** — diferente dos 50/200 de `/transactions` e dos 200/500 de investimentos. Não reaproveitar a constante de paginação das outras telas; um `limit=200` aqui volta `422`.
 
 ### M6 — Investimentos
 
@@ -227,7 +255,8 @@ Regras adicionais para a UI:
 - `fx_rate` e `fx_rate_date` só fazem sentido juntos (validação servidor). Como o MVP é BRL, manter esses campos ocultos ou em uma seção avançada.
 - Erros de custódia chegam como `422` na criação ("venda sem custódia suficiente") e como `409` na exclusão ("a exclusão deixaria vendas sem custódia suficiente") — traduzir para linguagem clara e sugerir corrigir a movimentação anterior.
 - **Edição** (`PATCH /investments/movements/{id}`): envio parcial, sem precisar reenviar a movimentação inteira. O servidor funde o envio com a linha atual e valida o **resultado**, então trocar só o `movement_type` pode tornar obrigatórios campos que não estavam no corpo — o formulário de edição deve seguir a mesma tabela de exigências por tipo acima. `422` na custódia negativa, e nesse caso a linha **não** é alterada.
-- **Paginação:** a lista de ativos e o extrato aceitam `limit` (padrão **200**) e `offset`. O padrão trunca silenciosamente carteiras maiores que isso — a UI precisa paginar de fato, não confiar na primeira página.
+- **Paginação:** a lista de ativos e o extrato aceitam `limit` (padrão **200**, teto **500**) e `offset`. O padrão trunca silenciosamente carteiras maiores que isso — a UI precisa paginar de fato, não confiar na primeira página.
+  - **As duas respostas são lista pura, sem envelope e sem `total`.** Não existe contagem para calcular número de páginas: o contrato é **pedir até receber menos itens que o `limit`**. Quem procurar um `total` nessas rotas não vai achar — é decisão de contrato, não omissão. As rotas que têm envelope `{items, total, limit, offset}` são `/transactions` e `/transactions/imports`, e só elas.
 
 #### 6.3 Carteira consolidada (`GET /investments/portfolio`)
 
@@ -236,11 +265,19 @@ Cartões de topo: valor de mercado total, custo investido, ganho realizado, ganh
 Comportamentos obrigatórios:
 
 - **Campos nulos são estado de negócio, não erro.** `total_market_value` e `total_unrealized_gain` vêm `null` quando algum ativo com quantidade em custódia está sem cotação. Nesse caso, exibir "carteira parcial — atualize as cotações" em vez de `R$ 0,00`.
-- `twr`/`twr_annualized` exigem ao menos duas fotografias completas da carteira; `mwr` exige fluxos com 30 dias ou mais. Quando nulos, mostrar o texto de `profitability_note`, que o back-end já devolve pronto.
-- Tabela de posições com quantidade, preço médio, custo investido, cotação atual, valor de mercado, ganho não realizado, ganho realizado, proventos (bruto e líquido) e retorno sobre custo.
+- `twr`/`twr_annualized` exigem ao menos duas fotografias completas da carteira; `mwr` exige fluxos com 30 dias ou mais.
+  - **`profitability_note` é texto fixo e vem sempre**, em toda resposta, independentemente de haver indicador nulo — é a nota metodológica da seção ("indicadores líquidos de custos e brutos de IR; TWR exige duas fotografias; MWR exige 30 dias"), não uma explicação gerada para o caso. Exibir como rodapé permanente do bloco de rentabilidade. Mostrá-lo "só quando houver nulo" faz o texto sumir exatamente quando os indicadores aparecem — e ele explica o que os números significam, não a ausência deles.
+  - Para o indicador nulo em si, a mensagem é do front: "aguardando a segunda atualização de cotações" para TWR, "aguardando 30 dias de histórico" para MWR.
+- Tabela de posições com quantidade, preço médio, custo investido, cotação atual, valor de mercado, ganho não realizado, ganho realizado, proventos (bruto e líquido), **total vendido (`sales_proceeds`)** e retorno sobre custo. O `sales_proceeds` já vem em `PositionResponse` e é a coluna que fecha a leitura do que saiu da posição.
+- **Posições encerradas continuam na resposta.** O back-end percorre todos os ativos cadastrados, inclusive os totalmente vendidos: eles voltam com `quantity: 0`, `average_price: null` e `market_value` forçado a **0** (não nulo — a posição realmente não vale nada, o zero é informação e não ausência de cotação). Sem tratamento, o gráfico de alocação ganha fatias de valor zero e a tabela ganha linhas mortas.
+  - Filtrar por `quantity > 0` para os **gráficos de alocação** e para os cartões de topo por posição.
+  - **Não descartar essas linhas da tabela:** `realized_gain`, `dividends_net`, `sales_proceeds` e `return_on_cost` seguem significativos — vêm das vendas e dos proventos, e são justamente o resultado consolidado da operação. A saída é uma seção "Posições encerradas", recolhida por padrão, ou um filtro "mostrar encerradas" desligado por padrão.
+  - Nessas linhas, `average_price` nulo é estado normal (não há mais custódia para ter preço médio) — exibir "—", nunca `R$ 0,00`.
 - **Selo de cotação desatualizada:** cada posição traz `quote.stale` (calculado com `QUOTE_STALE_AFTER_MINUTES`, padrão 60 min) e `quote.collected_at` — mostrar "atualizado há X" e destacar em amarelo quando `stale` for verdadeiro. Posição sem `quote` recebe selo "sem cotação".
 - Gráficos: alocação por ativo e por tipo de ativo (agregação feita no front a partir de `market_value`).
 - **Curva de evolução** (`GET /investments/snapshots?start=&end=&limit=`): lista pura, em ordem cronológica, das fotografias da carteira. As fotografias são geradas na atualização de cotações — por isso a curva só começa a existir depois da primeira atualização, o mesmo motivo que segura o TWR.
+  - **`limit` tem padrão 365 e teto 1000, e corta as fotografias mais antigas — não as mais recentes.** É o comportamento certo para um gráfico de evolução (a curva precisa terminar em hoje), mas significa que o começo da série pode estar faltando sem nenhum aviso na resposta. Se a série voltar com exatamente `limit` pontos, o histórico provavelmente está truncado à esquerda: subir o `limit` ou marcar o início do gráfico como parcial.
+  - **`start` e `end` aqui exigem fuso horário explícito; sem ele, `422`.** É a mesma regra do restante de investimentos e o oposto de `/dashboard/*` e `/transactions`, que aceitam data ingênua e assumem `America/Sao_Paulo`. O seletor global de período alimenta as duas famílias com o mesmo valor — se ele emitir data sem offset, o dashboard funciona e só esta curva quebra. Emitir sempre ISO com offset resolve os dois de uma vez (M9).
 - **Exportar carteira** (`GET /investments/export?format=csv|xlsx&sheet=positions|movements`): o XLSX traz as duas abas; no CSV o `sheet` escolhe qual sai. Endpoint autenticado — mesmo tratamento de download por blob do M4.9. Campo nulo vem como célula vazia, nunca zero.
 
 #### 6.4 Cotações (`POST /investments/quotes/refresh`)
@@ -278,6 +315,7 @@ Fluxo em Configurações, seguindo exatamente a ordem que o back-end exige:
 - **Dinheiro:** valores chegam como string decimal no JSON. Não converter para `Number` antes de formatar em telas de investimento (preços têm até 6 casas e quantidades até 8) — formatar a partir da string ou usar uma biblioteca decimal.
 - **Fuso horário:** o back-end guarda tudo em UTC e interpreta datas sem fuso como `America/Sao_Paulo`. Exibir sempre em `America/Sao_Paulo`.
 - **Erros:** o FastAPI devolve `{"detail": "..."}` em string para os erros de negócio e uma lista de objetos para os 422 de validação do Pydantic — o interceptor precisa tratar os dois formatos.
+- **`404` é estado de tela, não erro genérico.** Cinco rotas o devolvem: transação, ativo, movimentação, job de importação e vínculo do Telegram. O caso comum não é digitação errada — é **link ou aba antiga apontando para um registro já excluído**, e `/investimentos/ativos/[id]` é onde isso mais acontece. As rotas de detalhe precisam de um estado "não encontrado" próprio, com caminho de volta para a lista; um toaster de erro sobre uma página vazia não é suficiente. Vale para o mesmo registro excluído em outra aba, não só para deep link.
 - **Segurança:** token no cabeçalho `Authorization: Bearer`. `CORS_ORIGINS` não aceita curinga, então a origem do front precisa estar declarada no `.env` do back-end.
 - **Acessibilidade e responsividade:** tabelas com rolagem horizontal própria, foco visível, contraste válido nos temas claro e escuro.
 
@@ -306,6 +344,12 @@ módulos acima; a tabela abaixo fica como rastro do que era lacuna e virou o qu�
 | Ordenação da lista de transações é fixa | ✅ `order_by`/`order` | M4.1 |
 | **Sem recuperação de senha esquecida** | ❌ **Continua aberta** | — |
 
+A auditoria de 17/08/2026 achou uma lacuna nova e ela **também já foi fechada**:
+
+| Lacuna de 17/08 | Situação | Onde está no plano |
+| --- | --- | --- |
+| `refresh_tokens` guardava `user_agent`, `created_at` e `last_used_at` para uma lista de sessões que nenhuma rota expunha | ✅ `GET /auth/sessions` + `session_id` no `TokenResponse` | M1.8 |
+
 ### 5.1 A única lacuna que permanece
 
 **Reset de senha por e-mail não existe** e ficou fora do escopo por decisão
@@ -329,6 +373,15 @@ Não são lacunas, são comportamentos que o front precisa respeitar:
 | Access token revogado ainda vale até expirar | Não tratar logout/troca de senha como corte imediato de acesso; a janela é de até 30 min |
 | Login bloqueia progressivamente após 5 falhas | Tratar `429` com `Retry-After` na tela de login (M1.2) |
 | Fuso: transações/dashboard assumem `America/Sao_Paulo`, investimentos **rejeitam** data sem fuso | Enviar sempre ISO com offset explícito (M9) |
+| `source` tem três valores (`web`, `telegram`, `import`) | Badge com três rótulos e fallback; planilha importada é o volume maior (M4.4) |
+| Exportação de transações só aceita `format`, `start` e `end` | Não prometer "exportar resultados filtrados"; avisar quando houver filtro ativo (M4.9) |
+| Importação até 5 MiB falha com `422`/`500` sem corpo de job | O `catch` não pode assumir `job_id`; exibir o `detail` (M5) |
+| Posições zeradas voltam na carteira com `market_value: 0` | Filtrar dos gráficos, manter em "posições encerradas" (M6.3) |
+| `404` existe em cinco rotas e não estava na lista de erros tratados | Estado "não encontrado" nas rotas de detalhe (M9) |
+| `limit` padrão difere por rota: 50/200, 200/500, 20/100, 365/1000 | Constante por rota, não uma global (M5, M6.2, M6.3) |
+| `profitability_note` é texto fixo e sempre presente | Rodapé permanente do bloco de rentabilidade (M6.3) |
+| `/health` está fora do prefixo `/api/v1` | Montar a URL a partir da base sem prefixo (§1) |
+| `POST /auth/logout` com corpo vazio devolve `422` | Mandar `refresh_token` ou `all_devices: true` (M1.4) |
 
 ---
 
@@ -349,7 +402,7 @@ Ativos, movimentações com formulário dinâmico por tipo, carteira consolidada
 *Entrega: a parte do back-end hoje totalmente inacessível ao usuário final passa a ser utilizável.*
 
 **Fase 4 — Ferramentas e acabamento**
-Simulador de juros compostos, configurações de conta (alterar senha, editar nome, encerrar todas as sessões, excluir conta), tema claro/escuro, estados vazios, acessibilidade e responsividade.
+Simulador de juros compostos, configurações de conta (alterar senha, editar nome, dispositivos conectados, encerrar todas as sessões, excluir conta), tema claro/escuro, estados vazios, acessibilidade e responsividade.
 
 ---
 
@@ -360,7 +413,9 @@ Simulador de juros compostos, configurações de conta (alterar senha, editar no
 - **Single-flight:** com o access token vencido, disparar várias requisições ao mesmo tempo produz **um** `POST /auth/refresh` — não vários. Um teste que force esse cenário faz parte do aceite, porque a falha aqui desloga o usuário de todos os aparelhos.
 - **Logout:** sair da conta com o access token já vencido revoga a sessão no servidor (o refresh token deixa de renovar), e não apenas limpa o estado local.
 - Nenhum valor monetário é formatado a partir de `float`; nenhum campo nulo da carteira aparece como `R$ 0,00`.
-- Erros `401`, `409`, `413`, `415`, `422`, `429` e `503` têm mensagem específica em português; `429` no login mostra a espera restante; `503` de cotação nunca derruba a página da carteira.
+- Erros `401`, `404`, `409`, `413`, `415`, `422`, `429`, `500` e `503` têm mensagem específica em português; `429` no login mostra a espera restante; `503` de cotação nunca derruba a página da carteira; `404` em rota de detalhe rende uma tela "não encontrado" com volta para a lista.
+- Nenhum valor de `source` renderiza badge vazio: `web`, `telegram` e `import` têm rótulo próprio.
+- A carteira com posição totalmente vendida não mostra fatia de valor zero no gráfico de alocação, e o resultado realizado dessa posição continua consultável.
 - Datas exibidas em `America/Sao_Paulo`; datas enviadas em ISO com offset, e os períodos respeitam `end` exclusivo.
 - Importação acima de 5 MiB acompanha o job até `completed` ou `failed`, sobrevivendo a um recarregamento da página.
 - O aceite da política do Telegram só é possível após o texto ter sido apresentado, e a versão enviada é a mesma exibida.

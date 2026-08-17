@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -21,6 +21,7 @@ from app.schemas.auth import (
     ProfileUpdate,
     RefreshRequest,
     RegisterRequest,
+    SessionResponse,
     TokenResponse,
     UserResponse,
 )
@@ -33,6 +34,7 @@ from app.services.login_throttle import (
 from app.services.sessions import (
     RefreshTokenError,
     issue_refresh_token,
+    list_active_sessions,
     revoke_all_for_user,
     revoke_refresh_token,
     rotate_refresh_token,
@@ -54,6 +56,7 @@ def _token_response(user: User, refresh_token: str, session: RefreshToken) -> To
         expires_at=expires_at,
         refresh_token=refresh_token,
         refresh_expires_at=session.expires_at,
+        session_id=session.id,
         user=user,
     )
 
@@ -193,6 +196,30 @@ def logout(
     # Sem distinguir "revoguei" de "não existia": um token de outro usuário não
     # deve ser confirmado como existente por quem está autenticado aqui.
     return MessageResponse(message="Sessão encerrada")
+
+
+@router.get("/sessions", response_model=list[SessionResponse])
+def list_sessions(
+    current_user: CurrentUser,
+    db: DatabaseSession,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> list[RefreshToken]:
+    """Aparelhos com sessão viva, da atividade mais recente para a mais antiga.
+
+    Exige access token válido, e não o refresh token: ver a lista de aparelhos é
+    ação sobre a conta inteira, o mesmo critério do `logout` com `all_devices`.
+
+    Lista pura, sem `total` — mesmo contrato de `/investments/assets`: o cliente
+    pagina até receber menos itens que o `limit`. Na prática uma conta tem
+    poucas sessões vivas, já que cada uma expira em
+    `REFRESH_TOKEN_EXPIRE_MINUTES`.
+
+    Não há campo dizendo qual é a sessão atual, porque o access token é stateless
+    e não sabe de qual linha nasceu. Quem sabe é o cliente: o `session_id` do
+    `TokenResponse` que ele guardou identifica a própria linha nesta lista.
+    """
+    return list_active_sessions(db, current_user.id, limit=limit, offset=offset)
 
 
 @router.get("/me", response_model=UserResponse)
