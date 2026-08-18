@@ -95,3 +95,16 @@ export function describeError(error: unknown): NormalizedApiError {
   }
   return { status: 0, message: DEFAULT_MESSAGE, fieldErrors: [] };
 }
+
+/**
+ * 403 vindo do BFF (`/api/bff/*`) só tem uma origem possível para uma sessão
+ * de browser legítima: `require_password_compliant_user`
+ * (backend/app/api/dependencies.py) barrando quem está com
+ * `must_change_password=True` — o outro 403 do back-end é a assinatura do
+ * webhook do Telegram, rota que o browser nunca chama. Usado no `onError`
+ * global do QueryClient (app/providers.tsx) para mandar a pessoa direto para
+ * /trocar-senha em vez de deixar a tela quebrar com um erro genérico.
+ */
+export function isPasswordChangeRequiredError(error: unknown): boolean {
+  return isAxiosLikeError(error) && error.response?.status === 403;
+}

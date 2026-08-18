@@ -72,5 +72,37 @@ def get_current_user(user: Annotated[User | None, Depends(get_optional_user)]) -
     return user
 
 
-CurrentUser = Annotated[User, Depends(get_current_user)]
+def require_password_compliant_user(
+    user: Annotated[User, Depends(get_current_user)],
+) -> User:
+    """Barra toda ação autenticada de quem está com `must_change_password=True`.
+
+    Sem isso, o sinalizador (app/models/user.py, ligado em `login`/scripts
+    de criação de conta) era só um convite educado que o front podia mostrar
+    ou não — um token roubado, ou alguém se passando pelo dono da conta,
+    continuaria com acesso irrestrito aos dados enquanto a pessoa real não
+    resolvesse a troca. Este é o ponto único que fecha a porta de verdade:
+    todo router que importa `CurrentUser` passa por aqui.
+
+    Exceção: o punhado de rotas que a própria pessoa bloqueada precisa
+    alcançar para sair da pendência usa `CurrentUserPendingAllowed`
+    (app/api/v1/auth.py: `GET /auth/me`, `POST /auth/change-password`,
+    `DELETE /auth/me`) — sem elas, ninguém teria como cumprir a exigência.
+    """
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Sua senha não atende aos requisitos de segurança atuais. "
+                "Troque a senha em POST /auth/change-password antes de continuar."
+            ),
+        )
+    return user
+
+
+CurrentUser = Annotated[User, Depends(require_password_compliant_user)]
+# Só para as rotas listadas na docstring de `require_password_compliant_user`
+# acima — em qualquer outro lugar, isso reabriria o buraco que a dependência
+# existe para fechar.
+CurrentUserPendingAllowed = Annotated[User, Depends(get_current_user)]
 OptionalUser = Annotated[User | None, Depends(get_optional_user)]

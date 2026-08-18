@@ -19,6 +19,13 @@ export interface UserResponse {
   email: string;
   full_name: string | null;
   created_at: string;
+  /**
+   * True para conta migrada (senha nunca conferida contra a regra de
+   * complexidade atual) ou cuja última senha conferida no login não passava
+   * nela. Só o login e o `/auth/change-password` atualizam este campo — é a
+   * única forma de saber, já que o hash não devolve a senha original.
+   */
+  must_change_password: boolean;
 }
 
 export interface TokenResponse {

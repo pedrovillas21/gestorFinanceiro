@@ -4,7 +4,13 @@ from fastapi import APIRouter, Header, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.api.dependencies import ClientIp, CurrentUser, DatabaseSession, OptionalUser
+from app.api.dependencies import (
+    ClientIp,
+    CurrentUser,
+    CurrentUserPendingAllowed,
+    DatabaseSession,
+    OptionalUser,
+)
 from app.core.security import (
     DUMMY_PASSWORD_HASH,
     create_access_token,
@@ -24,6 +30,7 @@ from app.schemas.auth import (
     SessionResponse,
     TokenResponse,
     UserResponse,
+    is_password_compliant,
 )
 from app.services.login_throttle import (
     LoginBlocked,
@@ -122,6 +129,12 @@ def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     clear_login_failures(db, email=payload.email, ip=client_ip)
+    # Único momento em que o servidor vê a senha em claro depois do cadastro —
+    # aproveita para conferir contra a regra de complexidade atual e migrar o
+    # sinalizador. Uma conta criada antes da regra nova, ou cuja senha nunca
+    # foi trocada desde então, é pega aqui em vez de exigir uma varredura
+    # offline (impossível: o hash não devolve a senha original).
+    user.must_change_password = not is_password_compliant(payload.password)
     return _start_session(db, user, user_agent)
 
 
@@ -223,7 +236,7 @@ def list_sessions(
 
 
 @router.get("/me", response_model=UserResponse)
-def me(current_user: CurrentUser) -> User:
+def me(current_user: CurrentUserPendingAllowed) -> User:
     return current_user
 
 
@@ -244,7 +257,7 @@ def update_profile(
 @router.post("/change-password", response_model=TokenResponse)
 def change_password(
     payload: ChangePasswordRequest,
-    current_user: CurrentUser,
+    current_user: CurrentUserPendingAllowed,
     db: DatabaseSession,
     user_agent: UserAgent = None,
 ) -> TokenResponse:
@@ -262,6 +275,9 @@ def change_password(
         current_user.hashed_password = hash_password(payload.new_password)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # A senha nova já passou pela validação de complexidade do
+    # ChangePasswordRequest — quita a pendência sinalizada em `login`.
+    current_user.must_change_password = False
     if payload.revoke_other_sessions:
         revoke_all_for_user(db, current_user.id)
     db.commit()
@@ -269,8 +285,13 @@ def change_password(
 
 
 @router.delete("/me", response_model=MessageResponse)
-def delete_account(current_user: CurrentUser, db: DatabaseSession) -> MessageResponse:
-    """Exerce o direito de exclusão; FKs com CASCADE removem todos os dados pessoais."""
+def delete_account(current_user: CurrentUserPendingAllowed, db: DatabaseSession) -> MessageResponse:
+    """Exerce o direito de exclusão; FKs com CASCADE removem todos os dados pessoais.
+
+    `CurrentUserPendingAllowed`, não `CurrentUser`: o direito de apagar a
+    própria conta não pode ficar condicionado a resolver uma pendência de
+    senha primeiro.
+    """
     db.delete(current_user)
     db.commit()
     return MessageResponse(message="Conta e dados associados excluídos")

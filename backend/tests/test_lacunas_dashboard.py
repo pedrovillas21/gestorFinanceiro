@@ -189,6 +189,7 @@ def test_token_response_requires_the_refresh_pair() -> None:
                 "email": "pessoa@example.com",
                 "full_name": None,
                 "created_at": datetime.now(UTC),
+                "must_change_password": False,
             },
         )
 
@@ -421,6 +422,7 @@ def test_token_response_tells_the_client_which_session_is_its_own() -> None:
         email="pessoa@example.com",
         full_name=None,
         created_at=datetime.now(UTC),
+        must_change_password=False,
     )
 
     resposta = auth._token_response(usuario, "token-da-sessao", session)
@@ -623,13 +625,20 @@ def test_blocked_login_answers_429_without_touching_the_password() -> None:
 
 def test_change_password_defaults_to_revoking_other_devices() -> None:
     payload = ChangePasswordRequest(
-        current_password="senha-antiga", new_password="senha-nova-seguraaa"
+        current_password="senha-antiga", new_password="Senha-nova-segura1"
     )
     assert payload.revoke_other_sessions is True
 
     with pytest.raises(ValidationError, match="72 bytes"):
         ChangePasswordRequest(
             current_password="senha-antiga", new_password="á" * 37
+        )
+
+
+def test_change_password_rejects_new_password_without_full_complexity() -> None:
+    with pytest.raises(ValidationError):
+        ChangePasswordRequest(
+            current_password="senha-antiga", new_password="sem-requisitos"
         )
 
 

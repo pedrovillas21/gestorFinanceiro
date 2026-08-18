@@ -24,6 +24,26 @@ def test_bcrypt_limit_is_enforced_in_utf8_bytes() -> None:
         RegisterRequest(email="pessoa@example.com", password=password)
 
 
+@pytest.mark.parametrize(
+    "password",
+    [
+        "semmaiuscula1!",  # falta maiúscula
+        "SEMMINUSCULA1!",  # falta minúscula
+        "SemNumeroAqui!",  # falta dígito
+        "SemEspecial123",  # falta caractere especial
+        "Curta1!",  # menos de 8 caracteres
+    ],
+)
+def test_register_rejects_password_without_full_complexity(password: str) -> None:
+    with pytest.raises(ValidationError):
+        RegisterRequest(email="pessoa@example.com", password=password)
+
+
+def test_register_accepts_password_with_full_complexity() -> None:
+    request = RegisterRequest(email="pessoa@example.com", password="Senha-Forte1")
+    assert request.password == "Senha-Forte1"
+
+
 def test_unknown_login_runs_dummy_bcrypt_comparison(monkeypatch) -> None:
     compared = {}
 
@@ -76,7 +96,7 @@ def test_registration_relies_on_database_unique_constraint(monkeypatch) -> None:
     monkeypatch.setattr(auth, "_start_session", lambda db, user, user_agent=None: "token")
 
     result = auth.register(
-        RegisterRequest(email="new@example.com", password="safe-password"), db
+        RegisterRequest(email="new@example.com", password="Safe-Password1"), db
     )
 
     assert result == "token"

@@ -7,6 +7,46 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
+# Mesma regra exibida no checklist de requisitos do front (cadastro e troca de
+# senha): mínimo 8 caracteres — já garantido pelo Field — mais 1 minúscula, 1
+# maiúscula, 1 dígito e 1 caractere especial. Login não passa por aqui: uma
+# senha antiga, criada antes desta regra, continua precisando autenticar.
+PASSWORD_COMPLEXITY_MESSAGE = (
+    "senha deve ter ao menos 1 letra minúscula, 1 letra maiúscula, "
+    "1 número e 1 caractere especial"
+)
+_LOWERCASE_PATTERN = re.compile(r"[a-z]")
+_UPPERCASE_PATTERN = re.compile(r"[A-Z]")
+_DIGIT_PATTERN = re.compile(r"\d")
+_SPECIAL_CHAR_PATTERN = re.compile(r"[^A-Za-z0-9\s]")
+
+
+def is_password_compliant(value: str) -> bool:
+    """Mesma regra de baixo, sem levantar exceção.
+
+    Usada fora de schema — em `app/api/v1/auth.py`, no login — para decidir se
+    a senha em claro que acabou de ser conferida (única vez que o servidor a
+    vê) já atende à regra nova ou marca `User.must_change_password`. Repete o
+    `len(value) < 8` aqui porque essa chamada não passa pelo `Field(min_length=
+    8)` do `RegisterRequest`/`ChangePasswordRequest`.
+    """
+    if len(value) < 8 or len(value.encode("utf-8")) > 72:
+        return False
+    return bool(
+        _LOWERCASE_PATTERN.search(value)
+        and _UPPERCASE_PATTERN.search(value)
+        and _DIGIT_PATTERN.search(value)
+        and _SPECIAL_CHAR_PATTERN.search(value)
+    )
+
+
+def _validate_password_complexity(value: str) -> str:
+    if len(value.encode("utf-8")) > 72:
+        raise ValueError("senha deve ter no máximo 72 bytes em UTF-8")
+    if not is_password_compliant(value):
+        raise ValueError(PASSWORD_COMPLEXITY_MESSAGE)
+    return value
+
 
 class RegisterRequest(BaseModel):
     email: str = Field(min_length=5, max_length=255)
@@ -24,9 +64,7 @@ class RegisterRequest(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password_bytes(cls, value: str) -> str:
-        if len(value.encode("utf-8")) > 72:
-            raise ValueError("senha deve ter no máximo 72 bytes em UTF-8")
-        return value
+        return _validate_password_complexity(value)
 
 
 class LoginRequest(BaseModel):
@@ -46,6 +84,11 @@ class UserResponse(BaseModel):
     email: str
     full_name: str | None
     created_at: datetime
+    # True para quem nunca teve a senha conferida contra a regra de complexidade
+    # nova (conta migrada) ou cuja última senha conferida não passava nela.
+    # Só o login pode atualizar este campo — é a única rota que vê a senha em
+    # claro depois do cadastro. Ver app/api/v1/auth.py `login`.
+    must_change_password: bool
 
 
 class TokenResponse(BaseModel):
@@ -106,9 +149,7 @@ class ChangePasswordRequest(BaseModel):
     @field_validator("new_password")
     @classmethod
     def validate_password_bytes(cls, value: str) -> str:
-        if len(value.encode("utf-8")) > 72:
-            raise ValueError("senha deve ter no máximo 72 bytes em UTF-8")
-        return value
+        return _validate_password_complexity(value)
 
 
 class MessageResponse(BaseModel):

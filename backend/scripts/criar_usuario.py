@@ -18,6 +18,7 @@ from sqlalchemy import select  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
 from app.models.user import User  # noqa: E402
+from app.schemas.auth import is_password_compliant  # noqa: E402
 
 
 def hash_senha(senha: str) -> str:
@@ -30,12 +31,29 @@ def main(email: str, nome: str | None, senha: str | None) -> None:
     if len(senha) < 8:
         raise SystemExit("❌ Use uma senha de pelo menos 8 caracteres.")
 
+    # Este script contorna o /auth/register (e a validação de complexidade do
+    # RegisterRequest junto). Sem marcar a conta aqui, ela nasceria com
+    # `must_change_password=False` (o default do modelo, pensado para o
+    # cadastro pela API) mesmo com uma senha fraca — e ninguém pediria a troca.
+    compliant = is_password_compliant(senha)
+    if not compliant:
+        print(
+            "⚠️  Essa senha não atende à regra atual (8+ caracteres, 1 minúscula, "
+            "1 maiúscula, 1 número, 1 caractere especial). A conta será criada assim "
+            "mesmo, mas vai pedir a troca no primeiro login."
+        )
+
     db = SessionLocal()
     try:
         if db.scalars(select(User).where(User.email == email)).one_or_none():
             raise SystemExit(f"❌ Já existe um usuário com o e-mail {email}")
 
-        usuario = User(email=email, full_name=nome, hashed_password=hash_senha(senha))
+        usuario = User(
+            email=email,
+            full_name=nome,
+            hashed_password=hash_senha(senha),
+            must_change_password=not compliant,
+        )
         db.add(usuario)
         db.commit()
         db.refresh(usuario)

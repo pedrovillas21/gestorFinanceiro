@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "resume/07-lacunas-backend-implementadas.md",
+                "file": "resume/como-rodar-o-bot.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "07-lacunas-backend-implementadas"
+              "title": "como-rodar-o-bot"
             }
           }
         ]
@@ -187,19 +187,27 @@
   },
   "active": "1ab8a2ba20e0a7a5",
   "lastOpenFiles": [
-    "backend/alembic/versions/__pycache__/b8f2c1d90a44_add_login_attempts_throttle.cpython-312.pyc",
-    "backend/tests/test_lacunas_dashboard.py.tmp.14424.cc4ac6550843",
-    "backend/app/services/__pycache__/login_throttle.cpython-312.pyc",
-    "backend/app/models/__pycache__/login_attempt.cpython-312.pyc",
-    "backend/scripts/purge_access_lifecycle.py",
-    "backend/scripts/purge_access_lifecycle.py.tmp.14424.554e58896dc6",
-    "backend/app/models/__init__.py.tmp.14424.575782868efc",
-    "backend/alembic/versions/b8f2c1d90a44_add_login_attempts_throttle.py",
-    "backend/app/services/login_throttle.py",
-    "backend/app/models/login_attempt.py",
-    "resume/07-lacunas-backend-implementadas.md.tmp.14424.3a88fdae703d",
-    "resume/06-viabilidade-cobertura-lacunas-backend.md",
+    "graphify-out/2026-08-18/GRAPH_REPORT.md",
+    "graphify-out/2026-08-18/manifest.json",
+    "graphify-out/2026-08-18/graph.json",
+    "graphify-out/2026-08-18",
+    "graphify-out/cache/ast/v0.9.38/db5254aa76a318f9b37364ff4d06c2518313dfcace36cbff13f240f11409645b.json",
+    "graphify-out/cache/ast/v0.9.38/eee4b4b5c514cf4360d2531639b0841680015dfc058097a86d78a86f9a6c47a4.json",
+    "graphify-out/cache/ast/v0.9.38/b13e39e6038d90fd0423374cbda578b27e5ca31d9971ee9e80b16065941d6fe1.json",
+    "graphify-out/cache/ast/v0.9.38/859e0a81bd7257d5e4023f06627b0618078bab5558b4796c2215fb13bd078150.json",
+    "graphify-out/cache/ast/v0.9.38/56c248fcacdd433b965239dc357b56612ac3f006459506ed298c943876df4bfd.json",
+    "frontend/components/dashboard/TelegramConnectFlow.tsx.tmp.880.d8a1ca09b07e",
+    "frontend/components/dashboard/TelegramCard.tsx.tmp.880.e190299347f2",
+    "frontend/node_modules/@types/qrcode/README.md",
+    "frontend/node_modules/pngjs/coverage/lcov-report/sort-arrow-sprite.png",
+    "frontend/node_modules/pngjs/coverage/lcov-report/favicon.png",
+    "frontend/node_modules/which-module/README.md",
+    "frontend/node_modules/wrap-ansi/readme.md",
+    "frontend/node_modules/require-main-filename/CHANGELOG.md",
+    "frontend/node_modules/decamelize/readme.md",
+    "frontend/node_modules/yargs/node_modules/p-limit/readme.md",
     "resume/07-lacunas-backend-implementadas.md",
+    "resume/06-viabilidade-cobertura-lacunas-backend.md",
     "resume/05-plano-funcionalidades-dashboard-frontend.md",
     "resume/04-funcionalidades-backend-telegram-dashboard.md",
     "resume/03-backend-bot-operacao-validacao-final.md",

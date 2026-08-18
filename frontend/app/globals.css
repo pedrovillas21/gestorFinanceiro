@@ -33,8 +33,15 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/*
+ * Tema claro/escuro (lib/theme.tsx): "system" não grava `data-theme`, então
+ * segue só a media query abaixo; "light"/"dark" gravam o atributo no <html>
+ * e precisam vencer a preferência do sistema — por isso o `:not([data-theme=
+ * "light"])` na media query e o bloco `[data-theme="dark"]` reforçando os
+ * mesmos tokens fora dela.
+ */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --background: #0a0a0a;
     --foreground: #ededed;
 
@@ -52,8 +59,32 @@
   }
 }
 
+:root[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+
+  --surface: #161616;
+  --surface-foreground: #ededed;
+  --border: #2a2a2a;
+
+  --muted: #a1a1aa;
+  --primary: #3b82f6;
+  --primary-foreground: #0a0a0a;
+
+  --success: #22c55e;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Foco visível nos dois temas (Fase 8 pede isso cedo o bastante para não ter
+   que revisitar cada componente depois). */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
