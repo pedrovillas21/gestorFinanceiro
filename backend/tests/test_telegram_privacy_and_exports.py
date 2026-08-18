@@ -3,12 +3,19 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO, StringIO
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from openpyxl import load_workbook
 
 from app.core.config import settings
-from app.services.spreadsheets import export_csv, export_xlsx
+from app.services.spreadsheets import (
+    _format_brl,
+    _format_period_label,
+    export_csv,
+    export_transactions_pdf,
+    export_xlsx,
+)
 from app.services.telegram_bot import (
     _buscar_pendencia,
     _consentimento_valido,
@@ -117,3 +124,48 @@ def test_xlsx_export_escapes_formula_prefixes() -> None:
         assert all(row[index].data_type == "s" for index in (2, 4, 5))
     finally:
         workbook.close()
+
+
+def test_format_brl_groups_thousands_from_decimal_without_float() -> None:
+    assert _format_brl(Decimal("1234567.9")) == "R$ 1.234.567,90"
+    assert _format_brl(Decimal("0.5")) == "R$ 0,50"
+    assert _format_brl(Decimal("-42.90")) == "-R$ 42,90"
+
+
+def test_format_period_label_shows_last_included_day_for_exclusive_end() -> None:
+    # `end` é exclusivo (backend/app/api/v1/transactions.py `_conditions`): o
+    # rótulo do relatório precisa mostrar 31/08, não 01/09. Construído com o
+    # offset de America/Sao_Paulo (não UTC) porque é assim que o front sempre
+    # emite essas datas (lib/format.ts `toIsoWithOffset`) — meia-noite UTC
+    # legitimamente vira 31/07 à noite em SP, então testar com UTC aqui
+    # denunciaria um bug que não existe.
+    tz = ZoneInfo("America/Sao_Paulo")
+    start = datetime(2026, 8, 1, tzinfo=tz)
+    end = datetime(2026, 9, 1, tzinfo=tz)
+    assert _format_period_label(start, end) == "Período: 01/08/2026 até 31/08/2026"
+    assert _format_period_label(None, None) == "Período: todo o histórico"
+    assert _format_period_label(start, None) == "Período: 01/08/2026 até hoje"
+
+
+def test_pdf_export_produces_a_valid_document_and_escapes_markup() -> None:
+    """Descrição com `&`/`<` não pode quebrar o Paragraph do reportlab (que interpreta um subconjunto de XML)."""
+    tricky = SimpleNamespace(
+        occurred_at=datetime(2026, 8, 10, tzinfo=UTC),
+        type="income",
+        description="Salário <julho> & bônus",
+        amount=Decimal("1234.56"),
+        category=None,
+        payment_method=None,
+    )
+    content = export_transactions_pdf(
+        [tricky, _formula_transaction()],
+        start=datetime(2026, 8, 1, tzinfo=UTC),
+        end=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    assert content.startswith(b"%PDF")
+    assert len(content) > 0
+
+
+def test_pdf_export_handles_an_empty_period() -> None:
+    content = export_transactions_pdf([], start=None, end=None)
+    assert content.startswith(b"%PDF")

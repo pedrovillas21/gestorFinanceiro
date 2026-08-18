@@ -161,10 +161,11 @@ Antes de escrever código de tabela: `@tanstack/react-table` resolveu para 9.0.0
 - Paginação `limit`/`offset` usando o `total` do envelope.
 - Badge de origem com três valores: `web`, `telegram` e `import` — mais fallback para desconhecido. Numa base migrada de planilha, `import` é a maioria das linhas; um badge binário renderiza errado justamente no volume maior.
 - Criar/editar/excluir com zod. POST: `amount > 0` com 2 casas, `source` é definido pelo servidor (não enviar). PATCH é parcial, mas `description`, `amount`, `type` e `occurred_at` não aceitam `null` (422). Exclusão com confirmação e undo otimista.
-- Exportar — `GET /transactions/export` aceita só `format`, `start` e `end`. `category`, `type` e `search` não são parâmetros. Rotular o botão "Exportar período", nunca "Exportar resultados", e avisar antes do download quando houver filtro ativo. Baixar via blob (rota autenticada não funciona em `<a href>` simples), usando o nome vindo do `Content-Disposition`.
+- Exportar — `GET /transactions/export` aceita só `format` (`csv|pdf`), `start` e `end`. `category`, `type` e `search` não são parâmetros. Rotular o botão "Exportar período", nunca "Exportar resultados", e avisar antes do download quando houver filtro ativo. Baixar via blob (rota autenticada não funciona em `<a href>` simples), usando o nome vindo do `Content-Disposition`.
+  - Decisão pós-Fase 3: XLSX saiu da exportação de transações (redundante com CSV — os dois só serializavam a mesma tabela) e virou PDF: extrato formatado e paginável (`app/services/spreadsheets.py::export_transactions_pdf`, reportlab), com totais de receita/despesa/saldo calculados em `Decimal` (nunca float). CSV continua para reimportação em planilha; PDF cobre leitura e compartilhamento. `export_xlsx` permanece no back-end só porque a importação de `.xlsx` ainda depende dela nos testes de round-trip — não é mais alcançável por nenhuma rota de exportação de transações.
 - Ações em lote ficam fora: hoje exigiriam N chamadas; aguardar endpoint em lote.
 
-**Validação**: criar, editar, excluir e desfazer; ordenar por cada coluna conferindo que a consulta é refeita; paginar até o fim; exportar CSV e XLSX.
+**Validação**: criar, editar, excluir e desfazer; ordenar por cada coluna conferindo que a consulta é refeita; paginar até o fim; exportar CSV e PDF.
 
 ### Fase 4 — Visão geral
 

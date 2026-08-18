@@ -23,7 +23,7 @@ from app.schemas.transaction import (
 )
 from app.services.spreadsheets import (
     export_csv,
-    export_xlsx,
+    export_transactions_pdf,
     import_transactions,
 )
 
@@ -286,7 +286,7 @@ def get_import_job(
 def export_transactions(
     current_user: CurrentUser,
     db: DatabaseSession,
-    format: Literal["csv", "xlsx"] = "csv",
+    format: Literal["csv", "pdf"] = "csv",
     start: datetime | None = None,
     end: datetime | None = None,
 ) -> StreamingResponse:
@@ -297,9 +297,9 @@ def export_transactions(
             .order_by(Transaction.occurred_at)
         ).all()
     )
-    if format == "xlsx":
-        content = export_xlsx(items)
-        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if format == "pdf":
+        content = export_transactions_pdf(items, start, end)
+        media_type = "application/pdf"
     else:
         content = export_csv(items)
         media_type = "text/csv; charset=utf-8"

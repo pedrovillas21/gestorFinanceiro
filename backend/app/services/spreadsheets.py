@@ -326,6 +326,140 @@ def export_xlsx(transactions: list[Transaction]) -> bytes:
 
 
 # --------------------------------------------------------------------------------------
+# Exportação de transações em PDF — relatório legível/imprimível. O CSV cobre
+# reimportação em outra planilha; este cobre leitura e compartilhamento
+# (extrato formatado, com totais), então os dois deixam de ser redundantes.
+# --------------------------------------------------------------------------------------
+
+_PDF_TYPE_LABEL = {"income": "Receita", "expense": "Despesa"}
+_PDF_SUCCESS_COLOR = "#16a34a"  # mesmo token --success de frontend/app/globals.css (tema claro)
+_PDF_DANGER_COLOR = "#dc2626"  # mesmo token --danger
+
+
+def _format_brl(value: Decimal) -> str:
+    """Mesma regra dura do resto do projeto: formata a partir do Decimal armazenado, nunca de um float intermediário."""
+    quantized = value.quantize(Decimal("0.01"))
+    sign = "-" if quantized < 0 else ""
+    integer_part, _, fraction_part = f"{abs(quantized):f}".partition(".")
+    groups: list[str] = []
+    while len(integer_part) > 3:
+        groups.insert(0, integer_part[-3:])
+        integer_part = integer_part[:-3]
+    groups.insert(0, integer_part)
+    return f"{sign}R$ {'.'.join(groups)},{fraction_part}"
+
+
+def _format_datetime_ptbr(value: datetime) -> str:
+    return value.astimezone(TZ).strftime("%d/%m/%Y %H:%M")
+
+
+def _format_date_ptbr(value: datetime) -> str:
+    return value.astimezone(TZ).strftime("%d/%m/%Y")
+
+
+def _format_period_label(start: datetime | None, end: datetime | None) -> str:
+    """`end` é exclusivo (contrato de `_conditions`) — o rótulo mostra o último dia incluído, não `end` em si."""
+    if start is None and end is None:
+        return "Período: todo o histórico"
+    start_label = _format_date_ptbr(start) if start is not None else "o início"
+    end_label = _format_date_ptbr(end - timedelta(microseconds=1)) if end is not None else "hoje"
+    return f"Período: {start_label} até {end_label}"
+
+
+def export_transactions_pdf(
+    transactions: list[Transaction], start: datetime | None, end: datetime | None
+) -> bytes:
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    styles = getSampleStyleSheet()
+    cell_style = styles["Normal"].clone("cell")
+    cell_style.fontSize = 8
+    cell_style.leading = 10
+
+    def cell(text: str) -> Paragraph:
+        return Paragraph(escape(text), cell_style)
+
+    story = [
+        Paragraph("Extrato de transações", styles["Title"]),
+        Paragraph(_format_period_label(start, end), styles["Normal"]),
+        Paragraph(f"Gerado em {_format_datetime_ptbr(datetime.now(UTC))}", styles["Normal"]),
+        Spacer(1, 0.5 * cm),
+    ]
+
+    header = ["Data", "Tipo", "Descrição", "Categoria", "Forma de pagamento", "Valor"]
+    rows: list[list[object]] = [header]
+    income_row_indexes: list[int] = []
+    expense_row_indexes: list[int] = []
+    total_income = Decimal("0")
+    total_expense = Decimal("0")
+    for item in transactions:
+        is_income = item.type == "income"
+        (income_row_indexes if is_income else expense_row_indexes).append(len(rows))
+        if is_income:
+            total_income += item.amount
+        else:
+            total_expense += item.amount
+        rows.append(
+            [
+                _format_datetime_ptbr(item.occurred_at),
+                _PDF_TYPE_LABEL.get(item.type, item.type),
+                cell(item.description),
+                cell(item.category or "Sem categoria"),
+                cell(item.payment_method or "—"),
+                _format_brl(item.amount),
+            ]
+        )
+
+    # Larguras somam 17,4cm — cabem nos 18cm úteis do A4 (21cm - 2x1,5cm de margem).
+    table = Table(
+        rows,
+        colWidths=[2.6 * cm, 1.6 * cm, 5.0 * cm, 3.0 * cm, 2.8 * cm, 2.4 * cm],
+        repeatRows=1,
+    )
+    style_commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f8f8f8")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#171717")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (0, 0), (1, -1), "CENTER"),
+        ("ALIGN", (-1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e4e4e7")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8f8f8")]),
+    ]
+    for row_index in income_row_indexes:
+        style_commands.append(("TEXTCOLOR", (-1, row_index), (-1, row_index), colors.HexColor(_PDF_SUCCESS_COLOR)))
+    for row_index in expense_row_indexes:
+        style_commands.append(("TEXTCOLOR", (-1, row_index), (-1, row_index), colors.HexColor(_PDF_DANGER_COLOR)))
+    table.setStyle(TableStyle(style_commands))
+    story.append(table)
+
+    balance = total_income - total_expense
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph(f"Total de receitas: {_format_brl(total_income)}", styles["Normal"]))
+    story.append(Paragraph(f"Total de despesas: {_format_brl(total_expense)}", styles["Normal"]))
+    story.append(Paragraph(f"<b>Saldo: {_format_brl(balance)}</b>", styles["Normal"]))
+
+    buffer = BytesIO()
+    SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm,
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+        title="Extrato de transações",
+    ).build(story)
+    return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------------------
 # Exportação da carteira de investimentos
 # --------------------------------------------------------------------------------------
 

@@ -5,11 +5,18 @@ import { createContext, useCallback, useContext, useMemo, useRef, useState } fro
 
 export type ToastVariant = "success" | "error" | "info";
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast {
   id: string;
   title: string;
   description?: string;
   variant: ToastVariant;
+  /** Botão extra no toast — hoje só o "Desfazer" da exclusão de transação (components/transactions/TransactionsTable.tsx). */
+  action?: ToastAction;
 }
 
 type ShowToastInput = Omit<Toast, "id">;
@@ -97,6 +104,18 @@ export function ToastViewport() {
               <p className="text-sm font-medium text-surface-foreground">{toast.title}</p>
               {toast.description ? (
                 <p className="mt-0.5 text-sm text-muted">{toast.description}</p>
+              ) : null}
+              {toast.action ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.action?.onClick();
+                    dismiss(toast.id);
+                  }}
+                  className="mt-1 text-sm font-medium text-primary hover:underline"
+                >
+                  {toast.action.label}
+                </button>
               ) : null}
             </div>
             <button
