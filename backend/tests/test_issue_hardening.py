@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from io import BytesIO
 from types import SimpleNamespace
 import uuid
@@ -23,6 +24,26 @@ def test_bcrypt_limit_is_enforced_in_utf8_bytes() -> None:
         RegisterRequest(email="pessoa@example.com", password=password)
 
 
+@pytest.mark.parametrize(
+    "password",
+    [
+        "semmaiuscula1!",  # falta maiúscula
+        "SEMMINUSCULA1!",  # falta minúscula
+        "SemNumeroAqui!",  # falta dígito
+        "SemEspecial123",  # falta caractere especial
+        "Curta1!",  # menos de 8 caracteres
+    ],
+)
+def test_register_rejects_password_without_full_complexity(password: str) -> None:
+    with pytest.raises(ValidationError):
+        RegisterRequest(email="pessoa@example.com", password=password)
+
+
+def test_register_accepts_password_with_full_complexity() -> None:
+    request = RegisterRequest(email="pessoa@example.com", password="Senha-Forte1")
+    assert request.password == "Senha-Forte1"
+
+
 def test_unknown_login_runs_dummy_bcrypt_comparison(monkeypatch) -> None:
     compared = {}
 
@@ -31,7 +52,18 @@ def test_unknown_login_runs_dummy_bcrypt_comparison(monkeypatch) -> None:
         return False
 
     monkeypatch.setattr(auth, "verify_password", fake_verify)
-    db = SimpleNamespace(scalar=lambda statement: None)
+    # O login falho registra a tentativa no bloqueio progressivo, então a sessão
+    # falsa precisa aceitar escrita — só a comparação de senha é o assunto aqui.
+    db = SimpleNamespace(
+        scalar=lambda statement: None,
+        scalars=lambda statement: SimpleNamespace(all=lambda: []),
+        add=lambda row: None,
+        flush=lambda: None,
+        commit=lambda: None,
+        # O INSERT do escopo novo roda dentro de um savepoint; sem banco aqui,
+        # basta um contexto que não faça nada.
+        begin_nested=nullcontext,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         auth.login(LoginRequest(email="missing@example.com", password="secret"), db)
@@ -61,10 +93,10 @@ def test_registration_relies_on_database_unique_constraint(monkeypatch) -> None:
 
     db = RecordingDb()
     monkeypatch.setattr(auth, "hash_password", lambda password: "hashed")
-    monkeypatch.setattr(auth, "_token_for", lambda user: "token")
+    monkeypatch.setattr(auth, "_start_session", lambda db, user, user_agent=None: "token")
 
     result = auth.register(
-        RegisterRequest(email="new@example.com", password="safe-password"), db
+        RegisterRequest(email="new@example.com", password="Safe-Password1"), db
     )
 
     assert result == "token"

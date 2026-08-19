@@ -15,3 +15,10 @@ class ImportJobResponse(BaseModel):
     error_message: str | None
     created_at: datetime
     completed_at: datetime | None
+
+
+class ImportJobListResponse(BaseModel):
+    items: list[ImportJobResponse]
+    total: int
+    limit: int
+    offset: int

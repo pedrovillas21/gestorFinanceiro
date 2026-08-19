@@ -33,6 +33,10 @@ class TelegramToken(Base):
         DateTime(timezone=True), nullable=True
     )
     linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Preenchido no DELETE /telegram/link. A linha sobrevive para preservar a
+    # versão e a data do consentimento; sem esta coluna, um vínculo revogado
+    # ficaria idêntico a um que nunca foi concluído (chat_id nulo nos dois casos).
+    unlinked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     privacy_consent_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     privacy_consented_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

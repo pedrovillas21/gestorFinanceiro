@@ -104,12 +104,59 @@ class MovementCreate(BaseModel):
         return self
 
 
+class MovementUpdate(BaseModel):
+    """Envio parcial de uma movimentação.
+
+    Sem validação cruzada de propósito: as regras por tipo de movimento (provento
+    exige valor, desdobramento exige fator, ...) dependem do estado final, não do
+    que veio no corpo. O endpoint funde este envio com a linha existente e valida
+    o resultado através de `MovementCreate`, para não duplicar as regras.
+    """
+
+    movement_type: MovementType | None = None
+    occurred_at: datetime | None = None
+    quantity: Decimal | None = Field(default=None, gt=0, max_digits=18)
+    unit_price: Decimal | None = Field(default=None, ge=0, max_digits=18)
+    costs: Decimal | None = Field(default=None, ge=0, max_digits=18)
+    gross_amount: Decimal | None = Field(default=None, ge=0, max_digits=18)
+    net_amount: Decimal | None = Field(default=None, ge=0, max_digits=18)
+    factor: Decimal | None = Field(default=None, gt=0, max_digits=18)
+    trade_kind: Literal["swing_trade", "day_trade"] | None = None
+    fx_rate: Decimal | None = Field(default=None, gt=0, max_digits=18)
+    fx_rate_date: date | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator(
+        "quantity",
+        "unit_price",
+        "costs",
+        "gross_amount",
+        "net_amount",
+        "factor",
+        "fx_rate",
+        mode="before",
+    )
+    @classmethod
+    def decimal_from_input(cls, value: object) -> Decimal | None:
+        return None if value is None else Decimal(str(value))
+
+
 class MovementResponse(MovementCreate):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     asset_id: uuid.UUID
     created_at: datetime
+
+
+class SnapshotResponse(BaseModel):
+    """Fotografia da carteira gravada a cada atualização de cotações."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    total_value: Decimal
+    net_cash_flow: Decimal
+    captured_at: datetime
 
 
 class QuoteResponse(BaseModel):

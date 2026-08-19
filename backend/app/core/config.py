@@ -14,12 +14,19 @@ class Settings(BaseSettings):
     # Autenticação JWT
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 10080
+    # Curto de propósito: o access token é stateless e não consulta a tabela de
+    # sessões, então revogar (logout, troca de senha) só tem efeito real quando
+    # ele expira. 30 minutos é a janela em que um token já revogado ainda passa.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Refresh token opaco, persistido e rotacionado a cada uso: 30 dias.
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 43200
 
-    # IA — Cascata do Gemini (modelo recente -> fallback estável)
+    # IA — Cascata do Gemini (do mais recente ao mais estável, 4 níveis)
     GEMINI_API_KEY: str
-    GEMINI_MODEL_PRIMARY: str = "gemini-flash-latest"
-    GEMINI_MODEL_FALLBACK: str = "gemini-2.5-flash"
+    GEMINI_MODEL_NIVEL_1: str = "gemini-3.7-flash"  # Nível 1: mais recente / principal
+    GEMINI_MODEL_NIVEL_2: str = "gemini-3.6-flash"  # Nível 2: primeiro fallback
+    GEMINI_MODEL_NIVEL_3: str = "gemini-3.5-flash"  # Nível 3: segundo fallback
+    GEMINI_MODEL_NIVEL_4: str = "gemini-2.5-flash"  # Nível 4: último recurso
 
     # Telegram
     TELEGRAM_BOT_TOKEN: str
@@ -31,6 +38,13 @@ class Settings(BaseSettings):
     # Validade (em minutos) do token de vínculo gerado para o Deep Link
     TELEGRAM_LINK_TOKEN_TTL_MINUTES: int = 30
     PRIVACY_POLICY_VERSION: str = "2026-08-10"
+
+    # Ligue **apenas** quando houver proxy confiável na frente (load balancer da
+    # hospedagem). Ligada sem proxy, qualquer cliente forja o próprio IP no
+    # X-Forwarded-For e escapa do bloqueio por IP do login — ou bloqueia o IP de
+    # outra pessoa de propósito. Desligada atrás de proxy, todo mundo chega com o
+    # IP do proxy e um atacante só bloquearia a base inteira.
+    TRUST_PROXY_HEADERS: bool = False
 
     # Front-end (link enviado ao usuário ainda não vinculado)
     WEB_APP_URL: str = "http://localhost:3000"

@@ -11,6 +11,8 @@ import uuid
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, undefer
 
@@ -287,39 +289,352 @@ def _escape_spreadsheet_formula(value: str | None) -> str:
     return value
 
 
-def export_csv(transactions: list[Transaction]) -> bytes:
-    output = StringIO(newline="")
-    writer = csv.writer(output, delimiter=";")
-    writer.writerow(["data", "tipo", "descricao", "valor", "categoria", "metodo_pagamento"])
-    for item in transactions:
-        writer.writerow(
-            [
-                item.occurred_at.isoformat(),
-                item.type,
-                _escape_spreadsheet_formula(item.description),
-                str(item.amount),
-                _escape_spreadsheet_formula(item.category),
-                _escape_spreadsheet_formula(item.payment_method),
-            ]
-        )
-    return output.getvalue().encode("utf-8-sig")
+# Mesmos tokens de cor do resto do projeto: --primary de frontend/app/globals.css
+# (tema claro) para o cabeçalho, --success/--danger para receita/despesa.
+_XLSX_HEADER_FILL = PatternFill("solid", fgColor="2563EB")
+_XLSX_HEADER_FONT = Font(bold=True, color="FFFFFF")
+_XLSX_HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
+_XLSX_ROW_ALIGNMENT = Alignment(vertical="center")
+_XLSX_BORDER = Border(*(Side(style="thin", color="D4D4D8") for _ in range(4)))
+_XLSX_BANDED_FILL = PatternFill("solid", fgColor="F4F4F5")
+_XLSX_INCOME_FONT = Font(color="16A34A")
+_XLSX_EXPENSE_FONT = Font(color="DC2626")
+_XLSX_MONEY_FORMAT = '"R$" #,##0.00'
+_XLSX_DATETIME_FORMAT = "DD/MM/YYYY HH:MM"
+_XLSX_TYPE_LABEL = {"income": "Receita", "expense": "Despesa"}
+_XLSX_COLUMN_WIDTHS = {"A": 18, "B": 12, "C": 32, "D": 14, "E": 20, "F": 20}
+
+
+def _xlsx_cell(
+    sheet,
+    value: object,
+    *,
+    font: Font | None = None,
+    fill: PatternFill | None = None,
+    number_format: str | None = None,
+    alignment: Alignment = _XLSX_ROW_ALIGNMENT,
+) -> WriteOnlyCell:
+    cell = WriteOnlyCell(sheet, value=value)
+    cell.border = _XLSX_BORDER
+    cell.alignment = alignment
+    if font is not None:
+        cell.font = font
+    if fill is not None:
+        cell.fill = fill
+    if number_format is not None:
+        cell.number_format = number_format
+    return cell
 
 
 def export_xlsx(transactions: list[Transaction]) -> bytes:
+    """Extrato formatado (fonte/cor/moeda/data), não só os valores crus do CSV."""
     workbook = Workbook(write_only=True)
     sheet = workbook.create_sheet("Transações")
-    sheet.append(["data", "tipo", "descricao", "valor", "categoria", "metodo_pagamento"])
-    for item in transactions:
+    sheet.freeze_panes = "A2"
+    for column, width in _XLSX_COLUMN_WIDTHS.items():
+        sheet.column_dimensions[column].width = width
+
+    header_row = [
+        _xlsx_cell(
+            sheet,
+            title,
+            font=_XLSX_HEADER_FONT,
+            fill=_XLSX_HEADER_FILL,
+            alignment=_XLSX_HEADER_ALIGNMENT,
+        )
+        for title in ["Data", "Tipo", "Descrição", "Valor", "Categoria", "Forma de pagamento"]
+    ]
+    sheet.append(header_row)
+
+    for row_number, item in enumerate(transactions, start=2):
+        is_income = item.type == "income"
+        type_font = _XLSX_INCOME_FONT if is_income else _XLSX_EXPENSE_FONT
+        banding = _XLSX_BANDED_FILL if row_number % 2 == 0 else None
         sheet.append(
             [
-                item.occurred_at.replace(tzinfo=None),
-                item.type,
-                _escape_spreadsheet_formula(item.description),
-                str(item.amount),
-                _escape_spreadsheet_formula(item.category),
-                _escape_spreadsheet_formula(item.payment_method),
+                _xlsx_cell(
+                    sheet,
+                    item.occurred_at.replace(tzinfo=None),
+                    fill=banding,
+                    number_format=_XLSX_DATETIME_FORMAT,
+                ),
+                _xlsx_cell(sheet, _XLSX_TYPE_LABEL.get(item.type, item.type), font=type_font, fill=banding),
+                _xlsx_cell(sheet, _escape_spreadsheet_formula(item.description), fill=banding),
+                _xlsx_cell(
+                    sheet,
+                    float(item.amount),
+                    font=type_font,
+                    fill=banding,
+                    number_format=_XLSX_MONEY_FORMAT,
+                ),
+                _xlsx_cell(sheet, _escape_spreadsheet_formula(item.category), fill=banding),
+                _xlsx_cell(sheet, _escape_spreadsheet_formula(item.payment_method), fill=banding),
             ]
         )
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+# --------------------------------------------------------------------------------------
+# Exportação de transações em PDF — relatório legível/imprimível. O CSV cobre
+# reimportação em outra planilha; este cobre leitura e compartilhamento
+# (extrato formatado, com totais), então os dois deixam de ser redundantes.
+# --------------------------------------------------------------------------------------
+
+_PDF_TYPE_LABEL = {"income": "Receita", "expense": "Despesa"}
+_PDF_SUCCESS_COLOR = "#16a34a"  # mesmo token --success de frontend/app/globals.css (tema claro)
+_PDF_DANGER_COLOR = "#dc2626"  # mesmo token --danger
+
+
+def _format_brl(value: Decimal) -> str:
+    """Mesma regra dura do resto do projeto: formata a partir do Decimal armazenado, nunca de um float intermediário."""
+    quantized = value.quantize(Decimal("0.01"))
+    sign = "-" if quantized < 0 else ""
+    integer_part, _, fraction_part = f"{abs(quantized):f}".partition(".")
+    groups: list[str] = []
+    while len(integer_part) > 3:
+        groups.insert(0, integer_part[-3:])
+        integer_part = integer_part[:-3]
+    groups.insert(0, integer_part)
+    return f"{sign}R$ {'.'.join(groups)},{fraction_part}"
+
+
+def _format_datetime_ptbr(value: datetime) -> str:
+    return value.astimezone(TZ).strftime("%d/%m/%Y %H:%M")
+
+
+def _format_date_ptbr(value: datetime) -> str:
+    return value.astimezone(TZ).strftime("%d/%m/%Y")
+
+
+def _format_period_label(start: datetime | None, end: datetime | None) -> str:
+    """`end` é exclusivo (contrato de `_conditions`) — o rótulo mostra o último dia incluído, não `end` em si."""
+    if start is None and end is None:
+        return "Período: todo o histórico"
+    start_label = _format_date_ptbr(start) if start is not None else "o início"
+    end_label = _format_date_ptbr(end - timedelta(microseconds=1)) if end is not None else "hoje"
+    return f"Período: {start_label} até {end_label}"
+
+
+def export_transactions_pdf(
+    transactions: list[Transaction], start: datetime | None, end: datetime | None
+) -> bytes:
+    from xml.sax.saxutils import escape
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    styles = getSampleStyleSheet()
+    cell_style = styles["Normal"].clone("cell")
+    cell_style.fontSize = 8
+    cell_style.leading = 10
+
+    def cell(text: str) -> Paragraph:
+        return Paragraph(escape(text), cell_style)
+
+    story = [
+        Paragraph("Extrato de transações", styles["Title"]),
+        Paragraph(_format_period_label(start, end), styles["Normal"]),
+        Paragraph(f"Gerado em {_format_datetime_ptbr(datetime.now(UTC))}", styles["Normal"]),
+        Spacer(1, 0.5 * cm),
+    ]
+
+    header = ["Data", "Tipo", "Descrição", "Categoria", "Forma de pagamento", "Valor"]
+    rows: list[list[object]] = [header]
+    income_row_indexes: list[int] = []
+    expense_row_indexes: list[int] = []
+    total_income = Decimal("0")
+    total_expense = Decimal("0")
+    for item in transactions:
+        is_income = item.type == "income"
+        (income_row_indexes if is_income else expense_row_indexes).append(len(rows))
+        if is_income:
+            total_income += item.amount
+        else:
+            total_expense += item.amount
+        rows.append(
+            [
+                _format_datetime_ptbr(item.occurred_at),
+                _PDF_TYPE_LABEL.get(item.type, item.type),
+                cell(item.description),
+                cell(item.category or "Sem categoria"),
+                cell(item.payment_method or "—"),
+                _format_brl(item.amount),
+            ]
+        )
+
+    # Larguras somam 17,4cm — cabem nos 18cm úteis do A4 (21cm - 2x1,5cm de margem).
+    table = Table(
+        rows,
+        colWidths=[2.6 * cm, 1.6 * cm, 5.0 * cm, 3.0 * cm, 2.8 * cm, 2.4 * cm],
+        repeatRows=1,
+    )
+    style_commands = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f8f8f8")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#171717")),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ALIGN", (0, 0), (1, -1), "CENTER"),
+        ("ALIGN", (-1, 0), (-1, -1), "RIGHT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e4e4e7")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8f8f8")]),
+    ]
+    for row_index in income_row_indexes:
+        style_commands.append(("TEXTCOLOR", (-1, row_index), (-1, row_index), colors.HexColor(_PDF_SUCCESS_COLOR)))
+    for row_index in expense_row_indexes:
+        style_commands.append(("TEXTCOLOR", (-1, row_index), (-1, row_index), colors.HexColor(_PDF_DANGER_COLOR)))
+    table.setStyle(TableStyle(style_commands))
+    story.append(table)
+
+    balance = total_income - total_expense
+    story.append(Spacer(1, 0.5 * cm))
+    story.append(Paragraph(f"Total de receitas: {_format_brl(total_income)}", styles["Normal"]))
+    story.append(Paragraph(f"Total de despesas: {_format_brl(total_expense)}", styles["Normal"]))
+    story.append(Paragraph(f"<b>Saldo: {_format_brl(balance)}</b>", styles["Normal"]))
+
+    buffer = BytesIO()
+    SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm,
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+        title="Extrato de transações",
+    ).build(story)
+    return buffer.getvalue()
+
+
+# --------------------------------------------------------------------------------------
+# Exportação da carteira de investimentos
+# --------------------------------------------------------------------------------------
+
+POSITION_HEADERS = [
+    "ticker",
+    "nome",
+    "tipo",
+    "moeda",
+    "quantidade",
+    "preco_medio",
+    "custo_investido",
+    "cotacao",
+    "cotacao_coletada_em",
+    "valor_mercado",
+    "ganho_nao_realizado",
+    "ganho_realizado",
+    "proventos_bruto",
+    "proventos_liquido",
+    "retorno_sobre_custo",
+]
+MOVEMENT_HEADERS = [
+    "data",
+    "ticker",
+    "tipo_movimento",
+    "quantidade",
+    "preco_unitario",
+    "custos",
+    "valor_bruto",
+    "valor_liquido",
+    "fator",
+    "operacao",
+    "cambio",
+    "cambio_data",
+    "observacoes",
+]
+
+
+def _optional(value: object) -> str:
+    """Nulo vira célula vazia, nunca "None" nem 0 — a distinção importa aqui.
+
+    Uma posição sem cotação tem `market_value` nulo; escrever 0 diria que a
+    posição vale zero, que é outra coisa.
+    """
+    return "" if value is None else str(value)
+
+
+def _position_row(position) -> list[str]:
+    quote = position.quote
+    return [
+        _escape_spreadsheet_formula(position.asset.ticker),
+        _escape_spreadsheet_formula(position.asset.name),
+        _escape_spreadsheet_formula(position.asset.asset_type),
+        _escape_spreadsheet_formula(position.asset.currency),
+        _optional(position.quantity),
+        _optional(position.average_price),
+        _optional(position.invested_cost),
+        _optional(quote.price if quote else None),
+        _optional(quote.collected_at.isoformat() if quote else None),
+        _optional(position.market_value),
+        _optional(position.unrealized_gain),
+        _optional(position.realized_gain),
+        _optional(position.dividends_gross),
+        _optional(position.dividends_net),
+        _optional(position.return_on_cost),
+    ]
+
+
+def _movement_row(movement, ticker: str) -> list[str]:
+    return [
+        movement.occurred_at.isoformat(),
+        _escape_spreadsheet_formula(ticker),
+        _escape_spreadsheet_formula(movement.movement_type),
+        _optional(movement.quantity),
+        _optional(movement.unit_price),
+        _optional(movement.costs),
+        _optional(movement.gross_amount),
+        _optional(movement.net_amount),
+        _optional(movement.factor),
+        _escape_spreadsheet_formula(movement.trade_kind),
+        _optional(movement.fx_rate),
+        _optional(movement.fx_rate_date.isoformat() if movement.fx_rate_date else None),
+        _escape_spreadsheet_formula(movement.notes),
+    ]
+
+
+def _rows_to_csv(headers: list[str], rows: list[list[str]]) -> bytes:
+    output = StringIO(newline="")
+    writer = csv.writer(output, delimiter=";")
+    writer.writerow(headers)
+    writer.writerows(rows)
+    return output.getvalue().encode("utf-8-sig")
+
+
+def export_positions_csv(positions: list) -> bytes:
+    return _rows_to_csv(POSITION_HEADERS, [_position_row(item) for item in positions])
+
+
+def export_movements_csv(movements: list[tuple[object, str]]) -> bytes:
+    """`movements` são pares (movimentação, ticker) — o ticker não está na linha."""
+    return _rows_to_csv(
+        MOVEMENT_HEADERS, [_movement_row(item, ticker) for item, ticker in movements]
+    )
+
+
+def export_portfolio_xlsx(
+    positions: list, movements: list[tuple[object, str]]
+) -> bytes:
+    """Carteira em duas abas: consolidado e extrato.
+
+    Cada uma responde a uma pergunta diferente — "quanto tenho hoje" e "como
+    cheguei aqui" —, e o XLSX é o único formato dos dois que comporta as duas
+    sem obrigar o usuário a baixar dois arquivos.
+    """
+    workbook = Workbook(write_only=True)
+    positions_sheet = workbook.create_sheet("Posições")
+    positions_sheet.append(POSITION_HEADERS)
+    for position in positions:
+        positions_sheet.append(_position_row(position))
+
+    movements_sheet = workbook.create_sheet("Movimentações")
+    movements_sheet.append(MOVEMENT_HEADERS)
+    for movement, ticker in movements:
+        movements_sheet.append(_movement_row(movement, ticker))
+
     output = BytesIO()
     workbook.save(output)
     return output.getvalue()

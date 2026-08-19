@@ -1,6 +1,8 @@
 """Hash de senha e emissão/validação dos tokens da API web."""
 
 from datetime import UTC, datetime, timedelta
+import hashlib
+import secrets
 import uuid
 
 import bcrypt
@@ -56,3 +58,22 @@ def decode_access_token(token: str) -> uuid.UUID:
         return uuid.UUID(payload["sub"])
     except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
         raise InvalidCredentialsError("token inválido ou expirado") from exc
+
+
+# 32 bytes de urandom; `token_urlsafe` devolve ~43 caracteres seguros em URL.
+REFRESH_TOKEN_BYTES = 32
+
+
+def generate_refresh_token() -> tuple[str, str, datetime]:
+    """Devolve (valor entregue ao cliente, hash guardado no banco, expiração).
+
+    O valor em claro nunca é persistido: só o cliente fica com ele.
+    """
+    token = secrets.token_urlsafe(REFRESH_TOKEN_BYTES)
+    expires_at = datetime.now(UTC) + timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
+    return token, hash_refresh_token(token), expires_at
+
+
+def hash_refresh_token(token: str) -> str:
+    """SHA-256 em hexadecimal — cabe no `String(64)` e é indexável."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

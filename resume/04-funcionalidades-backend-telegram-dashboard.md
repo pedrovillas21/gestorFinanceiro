@@ -103,7 +103,7 @@ O Telegram atualmente só cria lançamentos; não lista, edita nem exclui transa
 - Arquivos de até 5 MiB são processados no próprio request.
 - Arquivos maiores que 5 MiB viram jobs persistentes e recuperáveis após falha do processo.
 - `GET /api/v1/transactions/imports/{job_id}` retorna estado, totais e eventual erro.
-- `GET /api/v1/transactions/export?format=csv|xlsx` exporta os lançamentos, com filtro opcional de período.
+- `GET /api/v1/transactions/export?format=xlsx|pdf` exporta os lançamentos, com filtro opcional de período. `xlsx` é o padrão; a exportação em CSV foi removida (XLSX é lido por qualquer app de planilha e sai formatado — moeda, cores por tipo, cabeçalho fixo).
 - A exportação neutraliza textos que poderiam ser interpretados como fórmula pelo Excel ou outro leitor de planilhas.
 
 Não existem comandos do Telegram para enviar, importar, gerar ou receber planilhas.

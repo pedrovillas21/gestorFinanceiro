@@ -13,15 +13,16 @@ from app.api.dependencies import CurrentUser, DatabaseSession
 from app.core.money import quantize_money
 from app.models.import_job import ImportJob
 from app.models.transaction import Transaction
-from app.schemas.import_job import ImportJobResponse
+from app.schemas.import_job import ImportJobListResponse, ImportJobResponse
 from app.schemas.transaction import (
+    CategoryOption,
     TransactionCreate,
     TransactionListResponse,
     TransactionResponse,
     TransactionUpdate,
 )
 from app.services.spreadsheets import (
-    export_csv,
+    export_transactions_pdf,
     export_xlsx,
     import_transactions,
 )
@@ -31,6 +32,17 @@ router = APIRouter(prefix="/transactions", tags=["transactions"])
 TZ = ZoneInfo("America/Sao_Paulo")
 ASYNC_IMPORT_THRESHOLD = 5 * 1024 * 1024
 MAX_IMPORT_UPLOAD_BYTES = 10 * 1024 * 1024
+
+# Lista branca: o nome da coluna vem da query string e nunca pode virar SQL
+# arbitrário. Só colunas com sentido de ordenação para o usuário entram aqui.
+ORDERABLE_COLUMNS = {
+    "occurred_at": Transaction.occurred_at,
+    "amount": Transaction.amount,
+    "description": Transaction.description,
+    "category": Transaction.category,
+    "created_at": Transaction.created_at,
+}
+OrderBy = Literal["occurred_at", "amount", "description", "category", "created_at"]
 
 
 def _as_utc(value: datetime | None) -> datetime:
@@ -88,6 +100,8 @@ def list_transactions(
     category: str | None = None,
     transaction_type: Literal["income", "expense"] | None = Query(default=None, alias="type"),
     search: str | None = None,
+    order_by: OrderBy = "occurred_at",
+    order: Literal["asc", "desc"] = "desc",
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> TransactionListResponse:
@@ -100,16 +114,73 @@ def list_transactions(
         search=search,
     )
     total = db.scalar(select(func.count()).select_from(Transaction).where(*conditions)) or 0
+    column = ORDERABLE_COLUMNS[order_by]
+    ordering = column.desc() if order == "desc" else column.asc()
     items = list(
         db.scalars(
             select(Transaction)
             .where(*conditions)
-            .order_by(Transaction.occurred_at.desc(), Transaction.id.desc())
+            # O desempate por id é obrigatório: `amount` e `category` repetem
+            # muito, e sem critério estável a paginação por offset devolve a
+            # mesma linha em duas páginas e pula outra.
+            .order_by(ordering, Transaction.id.desc())
             .limit(limit)
             .offset(offset)
         ).all()
     )
     return TransactionListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/categories", response_model=list[CategoryOption])
+def list_categories(
+    current_user: CurrentUser,
+    db: DatabaseSession,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    transaction_type: Literal["income", "expense"] | None = Query(default=None, alias="type"),
+) -> list[CategoryOption]:
+    """Categorias já usadas pelo usuário, da mais frequente para a menos.
+
+    Ordenar por frequência, e não alfabeticamente, coloca no topo do filtro o que
+    a pessoa de fato lança. Transações sem categoria não geram opção — o filtro
+    "Sem categoria" é decisão da interface, não um valor armazenado.
+    """
+    conditions = _conditions(
+        current_user.id, start=start, end=end, transaction_type=transaction_type
+    )
+    rows = db.execute(
+        select(Transaction.category, func.count())
+        .where(*conditions, Transaction.category.is_not(None), Transaction.category != "")
+        .group_by(Transaction.category)
+        .order_by(func.count().desc(), Transaction.category.asc())
+    ).all()
+    return [CategoryOption(category=category, count=count) for category, count in rows]
+
+
+@router.get("/imports", response_model=ImportJobListResponse)
+def list_import_jobs(
+    current_user: CurrentUser,
+    db: DatabaseSession,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> ImportJobListResponse:
+    """Histórico de importações, da mais recente para a mais antiga.
+
+    A coluna `content` guarda o arquivo inteiro e é `deferred` no model: esta
+    consulta não a menciona, então o SELECT não carrega megabytes por linha.
+    """
+    conditions = [ImportJob.user_id == current_user.id]
+    total = db.scalar(select(func.count()).select_from(ImportJob).where(*conditions)) or 0
+    items = list(
+        db.scalars(
+            select(ImportJob)
+            .where(*conditions)
+            .order_by(ImportJob.created_at.desc(), ImportJob.id.desc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
+    )
+    return ImportJobListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=TransactionResponse, status_code=status.HTTP_201_CREATED)
@@ -211,11 +282,17 @@ def get_import_job(
     return job
 
 
+_EXPORT_MEDIA_TYPES = {
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pdf": "application/pdf",
+}
+
+
 @router.get("/export")
 def export_transactions(
     current_user: CurrentUser,
     db: DatabaseSession,
-    format: Literal["csv", "xlsx"] = "csv",
+    format: Literal["xlsx", "pdf"] = "xlsx",
     start: datetime | None = None,
     end: datetime | None = None,
 ) -> StreamingResponse:
@@ -226,14 +303,14 @@ def export_transactions(
             .order_by(Transaction.occurred_at)
         ).all()
     )
-    if format == "xlsx":
-        content = export_xlsx(items)
-        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    if format == "pdf":
+        content = export_transactions_pdf(items, start, end)
     else:
-        content = export_csv(items)
-        media_type = "text/csv; charset=utf-8"
+        content = export_xlsx(items)
     headers = {"Content-Disposition": f'attachment; filename="transacoes.{format}"'}
-    return StreamingResponse(BytesIO(content), media_type=media_type, headers=headers)
+    return StreamingResponse(
+        BytesIO(content), media_type=_EXPORT_MEDIA_TYPES[format], headers=headers
+    )
 
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)
