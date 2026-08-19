@@ -58,15 +58,20 @@ export function PeriodSelector() {
   }, [hasRangeInUrl]);
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <div className="flex flex-wrap gap-1 rounded-md border border-border bg-surface p-1">
+    // `min-w-0` deixa este flex item encolher abaixo do conteúdo (o padrão do
+    // flexbox é não encolher), senão os seis presets forçariam o Topbar a
+    // quebrar linha em telas estreitas — o que empurrava tema/usuário para
+    // fora do lugar (ver comentário em Topbar.tsx). Em vez disso os presets
+    // rolam horizontalmente dentro da própria faixa.
+    <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <div className="flex flex-nowrap gap-1 overflow-x-auto rounded-md border border-border bg-surface p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {PERIOD_PRESETS.map((preset) => (
           <button
             key={preset}
             type="button"
             onClick={() => applyRange(preset)}
             aria-pressed={current.preset === preset}
-            className={`rounded px-2.5 py-1 text-xs font-medium transition-colors ${
+            className={`shrink-0 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
               current.preset === preset
                 ? "bg-primary text-primary-foreground"
                 : "text-muted hover:text-surface-foreground"

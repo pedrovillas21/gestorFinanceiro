@@ -11,6 +11,8 @@ import uuid
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.cell import WriteOnlyCell
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, undefer
 
@@ -287,37 +289,86 @@ def _escape_spreadsheet_formula(value: str | None) -> str:
     return value
 
 
-def export_csv(transactions: list[Transaction]) -> bytes:
-    output = StringIO(newline="")
-    writer = csv.writer(output, delimiter=";")
-    writer.writerow(["data", "tipo", "descricao", "valor", "categoria", "metodo_pagamento"])
-    for item in transactions:
-        writer.writerow(
-            [
-                item.occurred_at.isoformat(),
-                item.type,
-                _escape_spreadsheet_formula(item.description),
-                str(item.amount),
-                _escape_spreadsheet_formula(item.category),
-                _escape_spreadsheet_formula(item.payment_method),
-            ]
-        )
-    return output.getvalue().encode("utf-8-sig")
+# Mesmos tokens de cor do resto do projeto: --primary de frontend/app/globals.css
+# (tema claro) para o cabeçalho, --success/--danger para receita/despesa.
+_XLSX_HEADER_FILL = PatternFill("solid", fgColor="2563EB")
+_XLSX_HEADER_FONT = Font(bold=True, color="FFFFFF")
+_XLSX_HEADER_ALIGNMENT = Alignment(horizontal="center", vertical="center")
+_XLSX_ROW_ALIGNMENT = Alignment(vertical="center")
+_XLSX_BORDER = Border(*(Side(style="thin", color="D4D4D8") for _ in range(4)))
+_XLSX_BANDED_FILL = PatternFill("solid", fgColor="F4F4F5")
+_XLSX_INCOME_FONT = Font(color="16A34A")
+_XLSX_EXPENSE_FONT = Font(color="DC2626")
+_XLSX_MONEY_FORMAT = '"R$" #,##0.00'
+_XLSX_DATETIME_FORMAT = "DD/MM/YYYY HH:MM"
+_XLSX_TYPE_LABEL = {"income": "Receita", "expense": "Despesa"}
+_XLSX_COLUMN_WIDTHS = {"A": 18, "B": 12, "C": 32, "D": 14, "E": 20, "F": 20}
+
+
+def _xlsx_cell(
+    sheet,
+    value: object,
+    *,
+    font: Font | None = None,
+    fill: PatternFill | None = None,
+    number_format: str | None = None,
+    alignment: Alignment = _XLSX_ROW_ALIGNMENT,
+) -> WriteOnlyCell:
+    cell = WriteOnlyCell(sheet, value=value)
+    cell.border = _XLSX_BORDER
+    cell.alignment = alignment
+    if font is not None:
+        cell.font = font
+    if fill is not None:
+        cell.fill = fill
+    if number_format is not None:
+        cell.number_format = number_format
+    return cell
 
 
 def export_xlsx(transactions: list[Transaction]) -> bytes:
+    """Extrato formatado (fonte/cor/moeda/data), não só os valores crus do CSV."""
     workbook = Workbook(write_only=True)
     sheet = workbook.create_sheet("Transações")
-    sheet.append(["data", "tipo", "descricao", "valor", "categoria", "metodo_pagamento"])
-    for item in transactions:
+    sheet.freeze_panes = "A2"
+    for column, width in _XLSX_COLUMN_WIDTHS.items():
+        sheet.column_dimensions[column].width = width
+
+    header_row = [
+        _xlsx_cell(
+            sheet,
+            title,
+            font=_XLSX_HEADER_FONT,
+            fill=_XLSX_HEADER_FILL,
+            alignment=_XLSX_HEADER_ALIGNMENT,
+        )
+        for title in ["Data", "Tipo", "Descrição", "Valor", "Categoria", "Forma de pagamento"]
+    ]
+    sheet.append(header_row)
+
+    for row_number, item in enumerate(transactions, start=2):
+        is_income = item.type == "income"
+        type_font = _XLSX_INCOME_FONT if is_income else _XLSX_EXPENSE_FONT
+        banding = _XLSX_BANDED_FILL if row_number % 2 == 0 else None
         sheet.append(
             [
-                item.occurred_at.replace(tzinfo=None),
-                item.type,
-                _escape_spreadsheet_formula(item.description),
-                str(item.amount),
-                _escape_spreadsheet_formula(item.category),
-                _escape_spreadsheet_formula(item.payment_method),
+                _xlsx_cell(
+                    sheet,
+                    item.occurred_at.replace(tzinfo=None),
+                    fill=banding,
+                    number_format=_XLSX_DATETIME_FORMAT,
+                ),
+                _xlsx_cell(sheet, _XLSX_TYPE_LABEL.get(item.type, item.type), font=type_font, fill=banding),
+                _xlsx_cell(sheet, _escape_spreadsheet_formula(item.description), fill=banding),
+                _xlsx_cell(
+                    sheet,
+                    float(item.amount),
+                    font=type_font,
+                    fill=banding,
+                    number_format=_XLSX_MONEY_FORMAT,
+                ),
+                _xlsx_cell(sheet, _escape_spreadsheet_formula(item.category), fill=banding),
+                _xlsx_cell(sheet, _escape_spreadsheet_formula(item.payment_method), fill=banding),
             ]
         )
     output = BytesIO()

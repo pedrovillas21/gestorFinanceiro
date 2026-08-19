@@ -1,7 +1,6 @@
-from csv import reader
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from io import BytesIO, StringIO
+from io import BytesIO
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -12,7 +11,6 @@ from app.core.config import settings
 from app.services.spreadsheets import (
     _format_brl,
     _format_period_label,
-    export_csv,
     export_transactions_pdf,
     export_xlsx,
 )
@@ -103,15 +101,6 @@ def _formula_transaction():
         category="+cmd|' /C calc'!A0",
         payment_method="@SUM(1+1)",
     )
-
-
-def test_csv_export_escapes_formula_prefixes() -> None:
-    content = export_csv([_formula_transaction()]).decode("utf-8-sig")
-    row = list(reader(StringIO(content), delimiter=";"))[1]
-
-    assert row[2].startswith("'=")
-    assert row[4].startswith("'+")
-    assert row[5].startswith("'@")
 
 
 def test_xlsx_export_escapes_formula_prefixes() -> None:

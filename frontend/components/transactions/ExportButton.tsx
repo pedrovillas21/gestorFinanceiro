@@ -1,6 +1,6 @@
 "use client";
 
-import { Download, FileText } from "lucide-react";
+import { FileSpreadsheet, FileText } from "lucide-react";
 import { useState } from "react";
 
 import { exportTransactions, type ExportFormat } from "@/lib/api/transactions";
@@ -64,12 +64,12 @@ export function ExportButton({
       <Button
         type="button"
         variant="secondary"
-        loading={pending === "csv"}
+        loading={pending === "xlsx"}
         disabled={pending !== null}
-        onClick={() => handleExport("csv")}
+        onClick={() => handleExport("xlsx")}
       >
-        <Download className="h-4 w-4" aria-hidden="true" />
-        Exportar período (CSV)
+        <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
+        Exportar período (XLSX)
       </Button>
       <Button
         type="button"

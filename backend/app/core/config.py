@@ -21,10 +21,12 @@ class Settings(BaseSettings):
     # Refresh token opaco, persistido e rotacionado a cada uso: 30 dias.
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 43200
 
-    # IA — Cascata do Gemini (modelo recente -> fallback estável)
+    # IA — Cascata do Gemini (do mais recente ao mais estável, 4 níveis)
     GEMINI_API_KEY: str
-    GEMINI_MODEL_PRIMARY: str = "gemini-flash-latest"
-    GEMINI_MODEL_FALLBACK: str = "gemini-2.5-flash"
+    GEMINI_MODEL_NIVEL_1: str = "gemini-3.7-flash"  # Nível 1: mais recente / principal
+    GEMINI_MODEL_NIVEL_2: str = "gemini-3.6-flash"  # Nível 2: primeiro fallback
+    GEMINI_MODEL_NIVEL_3: str = "gemini-3.5-flash"  # Nível 3: segundo fallback
+    GEMINI_MODEL_NIVEL_4: str = "gemini-2.5-flash"  # Nível 4: último recurso
 
     # Telegram
     TELEGRAM_BOT_TOKEN: str

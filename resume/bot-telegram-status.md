@@ -37,7 +37,7 @@ Na segunda mensagem a forma de pagamento não foi citada e a IA devolveu nulo em
 | Endpoint do webhook | [`app/api/v1/telegram.py`](../backend/app/api/v1/telegram.py) | `POST /api/v1/telegram/webhook`, valida `X-Telegram-Bot-Api-Secret-Token` com comparação constante-no-tempo e responde 200 na hora, processando em background |
 | Schemas do Update | [`app/schemas/telegram.py`](../backend/app/schemas/telegram.py) | Subconjunto tipado do payload (`message`, `chat`, `voice`, `audio`), com `extra="ignore"` |
 | Cliente da Bot API | [`app/services/telegram_client.py`](../backend/app/services/telegram_client.py) | `sendMessage` (com fallback sem Markdown), `sendChatAction`, `getFile` + download do `.ogg`, e os métodos de provisionamento |
-| Cascata do Gemini | [`app/services/gemini.py`](../backend/app/services/gemini.py) | Áudio ou texto → JSON estruturado via `response_schema`; tenta `gemini-flash-latest` e cai para `gemini-2.5-flash` |
+| Cascata do Gemini | [`app/services/gemini.py`](../backend/app/services/gemini.py) | Áudio ou texto → JSON estruturado via `response_schema`; tenta em ordem `gemini-3.7-flash` → `gemini-3.6-flash` → `gemini-3.5-flash` → `gemini-2.5-flash` |
 | Regras do bot | [`app/services/telegram_bot.py`](../backend/app/services/telegram_bot.py) | Autenticação por `chat_id`, `/start <token>`, `/ajuda`, `/saldo [dia\|semana\|mês\|3meses]`, persistência e confirmação em BRL |
 | Modelos | [`app/models/`](../backend/app/models/) | `TelegramToken` com `link_token`/`linked_at`; `Transaction` com `payment_method` e `source` |
 | Provisionamento | [`scripts/setup_telegram_bot.py`](../backend/scripts/setup_telegram_bot.py) | `setWebhook` + `setMyCommands` + `setMyDescription` por HTTP, dispensando os cliques no @BotFather |

@@ -22,8 +22,8 @@ from app.schemas.transaction import (
     TransactionUpdate,
 )
 from app.services.spreadsheets import (
-    export_csv,
     export_transactions_pdf,
+    export_xlsx,
     import_transactions,
 )
 
@@ -282,11 +282,17 @@ def get_import_job(
     return job
 
 
+_EXPORT_MEDIA_TYPES = {
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pdf": "application/pdf",
+}
+
+
 @router.get("/export")
 def export_transactions(
     current_user: CurrentUser,
     db: DatabaseSession,
-    format: Literal["csv", "pdf"] = "csv",
+    format: Literal["xlsx", "pdf"] = "xlsx",
     start: datetime | None = None,
     end: datetime | None = None,
 ) -> StreamingResponse:
@@ -299,12 +305,12 @@ def export_transactions(
     )
     if format == "pdf":
         content = export_transactions_pdf(items, start, end)
-        media_type = "application/pdf"
     else:
-        content = export_csv(items)
-        media_type = "text/csv; charset=utf-8"
+        content = export_xlsx(items)
     headers = {"Content-Disposition": f'attachment; filename="transacoes.{format}"'}
-    return StreamingResponse(BytesIO(content), media_type=media_type, headers=headers)
+    return StreamingResponse(
+        BytesIO(content), media_type=_EXPORT_MEDIA_TYPES[format], headers=headers
+    )
 
 
 @router.get("/{transaction_id}", response_model=TransactionResponse)

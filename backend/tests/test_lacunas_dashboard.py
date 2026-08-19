@@ -101,15 +101,17 @@ def test_series_fills_periods_without_transactions() -> None:
         date(2026, 7, 1),
         date(2026, 8, 1),
     ]
-    # Julho não teve lançamento: precisa aparecer como zero, não sumir do eixo.
+    # Julho não teve lançamento: precisa aparecer no eixo com receita/despesa
+    # zeradas, mas o saldo é acumulado — carrega o saldo de junho em vez de
+    # zerar no meio do período.
     assert points[1] == SeriesPoint(
         period=date(2026, 7, 1),
         income=Decimal("0.00"),
         expense=Decimal("0.00"),
-        balance=Decimal("0.00"),
+        balance=Decimal("5000.00"),
     )
     assert points[0].balance == Decimal("5000.00")
-    assert points[2].balance == Decimal("-300.00")
+    assert points[2].balance == Decimal("4700.00")
 
 
 def test_series_refuses_an_interval_that_would_explode_the_payload() -> None:

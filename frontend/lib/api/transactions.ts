@@ -75,7 +75,7 @@ export async function deleteTransaction(id: string): Promise<void> {
   await http.delete(`/transactions/${id}`);
 }
 
-export type ExportFormat = "csv" | "pdf";
+export type ExportFormat = "xlsx" | "pdf";
 
 export interface ExportTransactionsParams {
   format: ExportFormat;
@@ -89,7 +89,7 @@ export interface ExportResult {
 }
 
 const EXPORT_FILENAME_FALLBACK: Record<ExportFormat, string> = {
-  csv: "transacoes.csv",
+  xlsx: "transacoes.xlsx",
   pdf: "transacoes.pdf",
 };
 

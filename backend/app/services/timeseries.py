@@ -87,14 +87,23 @@ def build_series(
     `totals` vem do banco já agrupado, indexado por (início do período, tipo).
     Preencher aqui, e não no cliente, garante que o gráfico não tenha buracos —
     um mês sem gasto precisa aparecer como zero, não sumir do eixo.
+
+    `balance` é acumulado ao longo da série (saldo corrente), não o líquido
+    isolado do bucket: um período sem lançamento repete o saldo do anterior em
+    vez de cair para zero, senão a linha do gráfico "zera" no meio do período
+    mesmo com o saldo total do intervalo positivo/negativo. O acumulado começa
+    do zero em `first` — não há visibilidade de saldo anterior a ele aqui,
+    já que `totals` só cobre o intervalo pedido.
     """
     points: list[SeriesPoint] = []
+    running_balance = ZERO
     for period in bucket_range(first, last, granularity):
         income = totals.get((period, "income"), ZERO)
         expense = totals.get((period, "expense"), ZERO)
+        running_balance += income - expense
         points.append(
             SeriesPoint(
-                period=period, income=income, expense=expense, balance=income - expense
+                period=period, income=income, expense=expense, balance=running_balance
             )
         )
     return points

@@ -1,7 +1,8 @@
 """Cascata do Gemini: extrai lançamentos financeiros de áudio ou texto (seção 4.2 do guia).
 
-Tenta primeiro o modelo Flash mais recente e, em caso de falha (indisponibilidade,
-quota, modelo removido), cai para o modelo estável configurado em `GEMINI_MODEL_FALLBACK`.
+Tenta, em ordem, os 4 níveis configurados em `GEMINI_MODEL_NIVEL_1..4` — do Flash mais
+recente ao mais estável — e só passa para o próximo em caso de falha (indisponibilidade,
+quota, modelo removido).
 """
 import json
 import logging
@@ -175,7 +176,12 @@ async def extrair_transacao(
     if texto:
         contents.append(f"Mensagem do usuário: {texto}")
 
-    modelos = [settings.GEMINI_MODEL_PRIMARY, settings.GEMINI_MODEL_FALLBACK]
+    modelos = [
+        settings.GEMINI_MODEL_NIVEL_1,
+        settings.GEMINI_MODEL_NIVEL_2,
+        settings.GEMINI_MODEL_NIVEL_3,
+        settings.GEMINI_MODEL_NIVEL_4,
+    ]
     ultimo_erro: Exception | None = None
     houve_resposta_fora_do_contrato = False
 
